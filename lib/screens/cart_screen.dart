@@ -15,21 +15,42 @@ class CartScreen extends StatefulWidget {
 class _CartScreenState extends State<CartScreen> {
   late CartService cartService;
 
-  // Tracks which items currently have a stock-validation error.
   final Map<String, bool> _itemErrors = {};
+  final Set<String> _selectedKeys = {};
 
-  bool get _hasErrors => _itemErrors.values.any((e) => e);
+  bool get _allSelected {
+    final items = cartService.getCartItems();
+    return items.isNotEmpty && items.every((i) => _selectedKeys.contains(i.variantKey));
+  }
+
+  bool get _selectedHasErrors => _itemErrors.entries
+      .any((e) => e.value && _selectedKeys.contains(e.key));
+
+  double get _selectedTotal => cartService
+      .getCartItems()
+      .where((i) => _selectedKeys.contains(i.variantKey))
+      .fold(0.0, (sum, i) => sum + i.getTotal());
+
+  int get _selectedCount => cartService
+      .getCartItems()
+      .where((i) => _selectedKeys.contains(i.variantKey))
+      .fold(0, (sum, i) => sum + i.quantity);
 
   @override
   void initState() {
     super.initState();
     cartService = CartService();
+    // Start with all items selected
+    for (final item in cartService.getCartItems()) {
+      _selectedKeys.add(item.variantKey);
+    }
   }
 
   void _removeItem(String variantKey) {
     setState(() {
       cartService.removeByVariantKey(variantKey);
       _itemErrors.remove(variantKey);
+      _selectedKeys.remove(variantKey);
     });
   }
 
@@ -39,11 +60,32 @@ class _CartScreenState extends State<CartScreen> {
 
   void _onQuantityChanged() => setState(() {});
 
+  void _toggleAll() {
+    setState(() {
+      if (_allSelected) {
+        _selectedKeys.clear();
+      } else {
+        for (final item in cartService.getCartItems()) {
+          _selectedKeys.add(item.variantKey);
+        }
+      }
+    });
+  }
+
+  void _toggleItem(String variantKey) {
+    setState(() {
+      if (_selectedKeys.contains(variantKey)) {
+        _selectedKeys.remove(variantKey);
+      } else {
+        _selectedKeys.add(variantKey);
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final isMobile = MediaQuery.of(context).size.width < 768;
     final cartItems = cartService.getCartItems();
-    final totalPrice = cartService.getTotalPrice();
 
     return Scaffold(
       backgroundColor: Colors.white,
@@ -118,30 +160,112 @@ class _CartScreenState extends State<CartScreen> {
             )
           : Column(
               children: [
-                // ── Item list ─────────────────────────────────────────────
-                Expanded(
-                  child: ListView.separated(
-                    padding: EdgeInsets.symmetric(
-                      horizontal: isMobile ? 16 : 40,
-                      vertical: 20,
-                    ),
-                    itemCount: cartItems.length,
-                    separatorBuilder: (_, __) => Divider(
-                      color: Colors.grey[200],
-                      height: 28,
-                    ),
-                    itemBuilder: (context, index) {
-                      final item = cartItems[index];
-                      return _CartItemRow(
-                        key: ValueKey(item.variantKey),
-                        item: item,
-                        isMobile: isMobile,
-                        onRemove: () => _removeItem(item.variantKey),
-                        onErrorChanged: _onItemError,
-                        onQuantityChanged: _onQuantityChanged,
-                      );
-                    },
+                // ── Select All row ────────────────────────────────────────
+                Container(
+                  padding: EdgeInsets.symmetric(
+                    horizontal: isMobile ? 16 : 40,
+                    vertical: 10,
                   ),
+                  decoration: const BoxDecoration(
+                    border: Border(
+                        bottom: BorderSide(color: Color(0xFFEEEEEE))),
+                  ),
+                  child: Row(
+                    children: [
+                      SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: Checkbox(
+                          value: _allSelected,
+                          onChanged: (_) => _toggleAll(),
+                          activeColor: const Color(0xFF0A0A0A),
+                          side: const BorderSide(
+                              color: Color(0xFFAAAAAA), width: 1.5),
+                          shape: const RoundedRectangleBorder(
+                              borderRadius: BorderRadius.zero),
+                          materialTapTargetSize:
+                              MaterialTapTargetSize.shrinkWrap,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      GestureDetector(
+                        onTap: _toggleAll,
+                        child: Text(
+                          'Select All',
+                          style: GoogleFonts.inter(
+                            fontSize: 12,
+                            color: const Color(0xFF555555),
+                          ),
+                        ),
+                      ),
+                      const Spacer(),
+                      Text(
+                        '${_selectedKeys.length} of ${cartItems.length} selected',
+                        style: GoogleFonts.inter(
+                          fontSize: 11,
+                          color: const Color(0xFFAAAAAA),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+                // ── Item list (grouped by seller) ─────────────────────────
+                Expanded(
+                  child: Builder(builder: (context) {
+                    // Group by seller, preserving insertion order
+                    final grouped = <String, List<CartItem>>{};
+                    for (final item in cartItems) {
+                      final sid = item.product.sellerId?.toString() ?? '';
+                      grouped.putIfAbsent(sid, () => []).add(item);
+                    }
+                    // Flat list: String = seller header, CartItem = product row
+                    final entries = <Object>[];
+                    for (final group in grouped.values) {
+                      final name = group.first.product.sellerName;
+                      entries.add(name.isNotEmpty ? name : 'Unknown Seller');
+                      entries.addAll(group);
+                    }
+
+                    return ListView.builder(
+                      padding: EdgeInsets.symmetric(
+                        horizontal: isMobile ? 16 : 40,
+                        vertical: 20,
+                      ),
+                      itemCount: entries.length,
+                      itemBuilder: (context, index) {
+                        final entry = entries[index];
+                        if (entry is String) {
+                          return _SellerHeader(
+                              name: entry, isFirst: index == 0);
+                        }
+                        final item = entry as CartItem;
+                        final isLast = index == entries.length - 1;
+                        final nextIsHeader =
+                            !isLast && entries[index + 1] is String;
+                        return Column(
+                          children: [
+                            _CartItemRow(
+                              key: ValueKey(item.variantKey),
+                              item: item,
+                              isMobile: isMobile,
+                              isSelected:
+                                  _selectedKeys.contains(item.variantKey),
+                              onToggleSelected: () =>
+                                  _toggleItem(item.variantKey),
+                              onRemove: () => _removeItem(item.variantKey),
+                              onErrorChanged: _onItemError,
+                              onQuantityChanged: _onQuantityChanged,
+                            ),
+                            if (!isLast && !nextIsHeader)
+                              Divider(color: Colors.grey[200], height: 28)
+                            else if (nextIsHeader)
+                              const SizedBox(height: 20),
+                          ],
+                        );
+                      },
+                    );
+                  }),
                 ),
 
                 // ── Summary + checkout ────────────────────────────────────
@@ -160,8 +284,8 @@ class _CartScreenState extends State<CartScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // Error banner
-                      if (_hasErrors) ...[
+                      // Error banner (only when a selected item has an error)
+                      if (_selectedHasErrors) ...[
                         Container(
                           width: double.infinity,
                           padding: const EdgeInsets.all(12),
@@ -186,12 +310,12 @@ class _CartScreenState extends State<CartScreen> {
                         const SizedBox(height: 16),
                       ],
 
-                      // Item count + total
+                      // Selected count + total of selected items
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
                           Text(
-                            '${cartService.getCartCount()} item${cartService.getCartCount() == 1 ? '' : 's'}',
+                            '$_selectedCount item${_selectedCount == 1 ? '' : 's'} selected',
                             style: GoogleFonts.inter(
                               fontSize: 12,
                               color: const Color(0xFF888888),
@@ -211,7 +335,7 @@ class _CartScreenState extends State<CartScreen> {
                               ),
                               const SizedBox(height: 2),
                               Text(
-                                '₱${totalPrice.toStringAsFixed(0)}',
+                                '₱${_selectedTotal.toStringAsFixed(0)}',
                                 style: GoogleFonts.inter(
                                   fontSize: 22,
                                   fontWeight: FontWeight.w700,
@@ -229,13 +353,20 @@ class _CartScreenState extends State<CartScreen> {
                         width: double.infinity,
                         height: 50,
                         child: ElevatedButton(
-                          onPressed: _hasErrors
+                          onPressed: (_selectedKeys.isEmpty || _selectedHasErrors)
                               ? null
-                              : () => Navigator.of(context).push(
+                              : () {
+                                  final selectedItems = cartItems
+                                      .where((i) => _selectedKeys
+                                          .contains(i.variantKey))
+                                      .toList();
+                                  Navigator.of(context).push(
                                     MaterialPageRoute(
-                                      builder: (_) => const CheckoutScreen(),
+                                      builder: (_) => CheckoutScreen(
+                                          selectedItems: selectedItems),
                                     ),
-                                  ),
+                                  );
+                                },
                           style: ElevatedButton.styleFrom(
                             backgroundColor: const Color(0xFF0A0A0A),
                             foregroundColor: Colors.white,
@@ -246,9 +377,11 @@ class _CartScreenState extends State<CartScreen> {
                                 borderRadius: BorderRadius.zero),
                           ),
                           child: Text(
-                            _hasErrors
+                            _selectedHasErrors
                                 ? 'FIX QUANTITIES TO CHECKOUT'
-                                : 'PROCEED TO CHECKOUT',
+                                : _selectedKeys.isEmpty
+                                    ? 'SELECT ITEMS TO CHECKOUT'
+                                    : 'CHECKOUT (${_selectedKeys.length})',
                             style: GoogleFonts.commissioner(
                               fontSize: 10,
                               fontWeight: FontWeight.w700,
@@ -273,6 +406,8 @@ class _CartScreenState extends State<CartScreen> {
 class _CartItemRow extends StatefulWidget {
   final CartItem item;
   final bool isMobile;
+  final bool isSelected;
+  final VoidCallback onToggleSelected;
   final VoidCallback onRemove;
   final void Function(String variantKey, bool hasError) onErrorChanged;
   final VoidCallback onQuantityChanged;
@@ -281,6 +416,8 @@ class _CartItemRow extends StatefulWidget {
     super.key,
     required this.item,
     required this.isMobile,
+    required this.isSelected,
+    required this.onToggleSelected,
     required this.onRemove,
     required this.onErrorChanged,
     required this.onQuantityChanged,
@@ -378,6 +515,24 @@ class _CartItemRowState extends State<_CartItemRow> {
         Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // ── Checkbox ────────────────────────────────────────────
+            Padding(
+              padding: const EdgeInsets.only(top: 4, right: 10),
+              child: SizedBox(
+                width: 20,
+                height: 20,
+                child: Checkbox(
+                  value: widget.isSelected,
+                  onChanged: (_) => widget.onToggleSelected(),
+                  activeColor: const Color(0xFF0A0A0A),
+                  side: const BorderSide(color: Color(0xFFAAAAAA), width: 1.5),
+                  shape: const RoundedRectangleBorder(
+                      borderRadius: BorderRadius.zero),
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+              ),
+            ),
+
             // ── Product image ───────────────────────────────────────
             Container(
               width: imgSize,
@@ -639,4 +794,37 @@ class _ImgPlaceholder extends StatelessWidget {
   Widget build(BuildContext context) => const Center(
         child: Icon(Icons.image_outlined, size: 28, color: Color(0xFFCCCCCC)),
       );
+}
+
+class _SellerHeader extends StatelessWidget {
+  final String name;
+  final bool isFirst;
+
+  const _SellerHeader({required this.name, this.isFirst = false});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: 14, top: isFirst ? 0 : 4),
+      child: Row(
+        children: [
+          const Icon(Icons.storefront_outlined,
+              size: 13, color: Color(0xFF555555)),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              name.toUpperCase(),
+              style: GoogleFonts.commissioner(
+                fontSize: 9,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 2,
+                color: const Color(0xFF555555),
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }

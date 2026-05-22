@@ -153,6 +153,22 @@ class _LoginScreenState extends State<LoginScreen>
 
     if (!mounted) return;
 
+    // Build and persist the address before any early return so it survives
+    // the email-verification redirect and is available at checkout.
+    final addressMap = {
+      'houseNumber': houseNumberCtrl.text.trim(),
+      'streetName': streetNameCtrl.text.trim(),
+      'barangay': _selectedLocation?['barangay'] ?? '',
+      'city': _selectedLocation?['city'] ?? '',
+      'province': _selectedLocation?['province'] ?? '',
+      'region': _selectedLocation?['region'] ?? '',
+      'barangayCode': _selectedLocation?['barangayCode'] ?? '',
+      'cityCode': _selectedLocation?['cityCode'] ?? '',
+      'provinceCode': _selectedLocation?['provinceCode'] ?? '',
+      'regionCode': _selectedLocation?['regionCode'] ?? '',
+    };
+    await AddressService.saveAddress(addressMap);
+
     if (error == 'VERIFY_EMAIL') {
       setState(() => loading = false);
       if (!mounted) return;
@@ -169,18 +185,8 @@ class _LoginScreenState extends State<LoginScreen>
       return;
     }
 
-    await AddressService.saveAddress({
-      'houseNumber': houseNumberCtrl.text.trim(),
-      'streetName': streetNameCtrl.text.trim(),
-      'barangay': _selectedLocation?['barangay'] ?? '',
-      'city': _selectedLocation?['city'] ?? '',
-      'province': _selectedLocation?['province'] ?? '',
-      'region': _selectedLocation?['region'] ?? '',
-      'barangayCode': _selectedLocation?['barangayCode'] ?? '',
-      'cityCode': _selectedLocation?['cityCode'] ?? '',
-      'provinceCode': _selectedLocation?['provinceCode'] ?? '',
-      'regionCode': _selectedLocation?['regionCode'] ?? '',
-    });
+    // Session exists (no email confirmation required) — also sync to Supabase.
+    await AddressService.saveToSupabase(addressMap);
 
     if (!mounted) return;
 

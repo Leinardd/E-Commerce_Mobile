@@ -13,10 +13,11 @@ class BuyerProfileScreen extends StatefulWidget {
   const BuyerProfileScreen({super.key});
 
   @override
-  State<BuyerProfileScreen> createState() => _BuyerProfileScreenState();
+  State<BuyerProfileScreen> createState() => BuyerProfileScreenState();
 }
 
-class _BuyerProfileScreenState extends State<BuyerProfileScreen> {
+class BuyerProfileScreenState extends State<BuyerProfileScreen> {
+  void reload() => _load();
   String? _email;
   Map<String, int> _counts = {};
   UserRole _userRole = UserRole.buyer;
@@ -46,7 +47,6 @@ class _BuyerProfileScreenState extends State<BuyerProfileScreen> {
       _userRole = results[1] as UserRole;
       _counts = {
         'purchased': orders.length,
-        Order.toPay: orders.where((o) => o.status == Order.toPay).length,
         Order.toShip: orders.where((o) => o.status == Order.toShip).length,
         Order.toReceive: orders.where((o) => o.status == Order.toReceive).length,
       };
@@ -102,7 +102,6 @@ class _BuyerProfileScreenState extends State<BuyerProfileScreen> {
 
     final orderItems = <Map<String, dynamic>>[
       {'icon': Icons.shopping_bag_outlined, 'label': 'PURCHASED', 'count': '${_counts['purchased'] ?? 0}'},
-      {'icon': Icons.credit_card_outlined, 'label': 'TO PAY', 'count': '${_counts[Order.toPay] ?? 0}'},
       {'icon': Icons.local_shipping_outlined, 'label': 'TO SHIP', 'count': '${_counts[Order.toShip] ?? 0}'},
       {'icon': Icons.move_to_inbox_outlined, 'label': 'TO RECEIVE', 'count': '${_counts[Order.toReceive] ?? 0}'},
     ];

@@ -1,21 +1,70 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:developer' as developer;
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/product.dart';
 
 class CartService {
   static final CartService _instance = CartService._internal();
   final List<CartItem> _cartItems = [];
+  String? _currentUserEmail;
 
   CartService._internal();
+  factory CartService() => _instance;
 
-  factory CartService() {
-    return _instance;
+  static String _cartKey(String email) => 'cart_$email';
+
+  String? get currentUserEmail => _currentUserEmail;
+
+  // ── Per-user loading ────────────────────────────────────────────────────────
+
+  /// Load the saved cart for [email] from SharedPreferences.
+  /// Call this right after a successful login.
+  Future<void> loadForUser(String email) async {
+    _currentUserEmail = email;
+    _cartItems.clear();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_cartKey(email));
+      if (raw == null) return;
+      final list = json.decode(raw) as List<dynamic>;
+      for (final item in list) {
+        _cartItems.add(CartItem.fromJson(item as Map<String, dynamic>));
+      }
+      developer.log('[CartService] Loaded ${_cartItems.length} items for $email');
+    } catch (e) {
+      developer.log('[CartService] loadForUser error: $e — starting fresh');
+      _cartItems.clear();
+    }
   }
 
-  // Get all cart items
-  List<CartItem> getCartItems() {
-    return _cartItems;
+  /// Clear the in-memory cart without deleting SharedPreferences data.
+  /// Call this on logout so the next login reloads the correct cart.
+  void clearInMemory() {
+    _cartItems.clear();
+    _currentUserEmail = null;
   }
 
-  // Add product to cart, deduplicating by product+variant combination
+  // ── Persistence ─────────────────────────────────────────────────────────────
+
+  Future<void> _persist() async {
+    final email = _currentUserEmail;
+    if (email == null) return;
+    // Snapshot cart data synchronously before the first await so that a
+    // concurrent clearInMemory() call cannot race and wipe the saved list.
+    final data = _cartItems.map((i) => i.toJson()).toList();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_cartKey(email), json.encode(data));
+    } catch (e) {
+      developer.log('[CartService] _persist error: $e');
+    }
+  }
+
+  // ── Cart operations ──────────────────────────────────────────────────────────
+
+  List<CartItem> getCartItems() => _cartItems;
+
   void addToCart(Product product,
       {String? selectedSize, String? selectedColor}) {
     final newItem = CartItem(
@@ -30,19 +79,19 @@ class CartService {
     } else {
       _cartItems.add(newItem);
     }
+    unawaited(_persist());
   }
 
-  // Remove by product ID (removes first match — use removeByVariantKey for precision)
   void removeFromCart(dynamic productId) {
     _cartItems.removeWhere((item) => item.product.id == productId);
+    unawaited(_persist());
   }
 
-  // Remove the exact variant entry
   void removeByVariantKey(String key) {
     _cartItems.removeWhere((item) => item.variantKey == key);
+    unawaited(_persist());
   }
 
-  // Update quantity by variant key
   void updateQuantityByVariant(String key, int quantity) {
     final idx = _cartItems.indexWhere((item) => item.variantKey == key);
     if (idx < 0) return;
@@ -51,25 +100,25 @@ class CartService {
     } else {
       _cartItems[idx].quantity = quantity;
     }
+    unawaited(_persist());
   }
 
-  // Get total cart count
-  int getCartCount() {
-    return _cartItems.fold(0, (sum, item) => sum + item.quantity);
+  void removeItems(List<String> variantKeys) {
+    _cartItems.removeWhere((item) => variantKeys.contains(item.variantKey));
+    unawaited(_persist());
   }
 
-  // Get total price
-  double getTotalPrice() {
-    return _cartItems.fold(0, (sum, item) => sum + item.getTotal());
-  }
-
-  // Clear cart
   void clearCart() {
     _cartItems.clear();
+    unawaited(_persist());
   }
 
-  // Check if product is in cart
-  bool isInCart(int productId) {
-    return _cartItems.any((item) => item.product.id == productId);
-  }
+  int getCartCount() =>
+      _cartItems.fold(0, (sum, item) => sum + item.quantity);
+
+  double getTotalPrice() =>
+      _cartItems.fold(0, (sum, item) => sum + item.getTotal());
+
+  bool isInCart(int productId) =>
+      _cartItems.any((item) => item.product.id == productId);
 }

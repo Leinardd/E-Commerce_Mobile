@@ -234,8 +234,12 @@ class _HomeScreenState extends State<HomeScreen>
   // ── Header ───────────────────────────────────────────────────────────────
 
   Widget _buildHeader(BuildContext context, bool isMobile) {
+    final cartCount = _cartService.getCartCount();
     return Container(
-      color: Colors.white,
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(bottom: BorderSide(color: Color(0xFFEEEEEE), width: 1)),
+      ),
       padding: EdgeInsets.symmetric(
         horizontal: isMobile ? 20 : 48,
         vertical: 22,
@@ -252,7 +256,53 @@ class _HomeScreenState extends State<HomeScreen>
               letterSpacing: 7,
             ),
           ),
-          if (!isMobile)
+          if (isMobile)
+            Row(
+              children: [
+                // Cart icon with badge
+                Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    IconButton(
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                      icon: const Icon(Icons.shopping_cart_outlined,
+                          color: Color(0xFF0A0A0A), size: 22),
+                      onPressed: () => _navigateToScreen('cart', context),
+                    ),
+                    if (cartCount > 0)
+                      Positioned(
+                        right: -4,
+                        top: -4,
+                        child: Container(
+                          width: 15,
+                          height: 15,
+                          decoration: const BoxDecoration(
+                            color: Color(0xFF0A0A0A),
+                            shape: BoxShape.circle,
+                          ),
+                          child: Center(
+                            child: Text(
+                              '$cartCount',
+                              style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 8,
+                                  fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(width: 16),
+                GestureDetector(
+                  onTap: () => _showProfileSheet(context),
+                  child: const Icon(Icons.account_circle_outlined,
+                      color: Color(0xFF0A0A0A), size: 22),
+                ),
+              ],
+            )
+          else
             Row(
               children: [
                 _navLink('HOME'),
@@ -340,6 +390,27 @@ class _HomeScreenState extends State<HomeScreen>
               _HoverButton(
                 label: 'SHOP NOW',
                 onTap: _shopNow,
+              ),
+              const SizedBox(height: 20),
+              GestureDetector(
+                onTap: _shopNow,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.search,
+                        size: 14, color: Color(0xFF888888)),
+                    const SizedBox(width: 6),
+                    Text(
+                      'Search products',
+                      style: GoogleFonts.inter(
+                        fontSize: 12,
+                        color: const Color(0xFF888888),
+                        decoration: TextDecoration.underline,
+                        decorationColor: const Color(0xFFCCCCCC),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ],
           ),
@@ -1000,7 +1071,6 @@ class _ProfileSheetState extends State<_ProfileSheet> {
       _riderRole  = results[2] as String;
       _counts = {
         'purchased':      orders.length,
-        Order.toPay:      orders.where((o) => o.status == Order.toPay).length,
         Order.toShip:     orders.where((o) => o.status == Order.toShip).length,
         Order.toReceive:  orders.where((o) => o.status == Order.toReceive).length,
       };
@@ -1105,7 +1175,6 @@ class _ProfileSheetState extends State<_ProfileSheet> {
 
     final orderItems = <Map<String, dynamic>>[
       {'icon': Icons.shopping_bag_outlined,   'label': 'PURCHASED', 'count': '${_counts['purchased'] ?? 0}'},
-      {'icon': Icons.credit_card_outlined,    'label': 'TO PAY',    'count': '${_counts[Order.toPay] ?? 0}'},
       {'icon': Icons.local_shipping_outlined, 'label': 'TO SHIP',   'count': '${_counts[Order.toShip] ?? 0}'},
       {'icon': Icons.move_to_inbox_outlined,  'label': 'TO RECEIVE','count': '${_counts[Order.toReceive] ?? 0}'},
     ];

@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import '../services/auth_service.dart';
+import '../services/cart_service.dart';
 import 'home_screen.dart';
 import 'shop_screen.dart';
 import 'buyer_profile_screen.dart';
@@ -12,6 +14,32 @@ class BuyerMainScreen extends StatefulWidget {
 
 class _BuyerMainScreenState extends State<BuyerMainScreen> {
   int _index = 0;
+  final _profileKey = GlobalKey<BuyerProfileScreenState>();
+
+  @override
+  void initState() {
+    super.initState();
+    _ensureCartLoaded();
+  }
+
+  // Safety net: if the Supabase session was auto-restored on app restart
+  // without going through the login screen, _currentUserEmail is null and
+  // addToCart would silently skip persisting. Load the cart here so the
+  // singleton is always ready when the buyer screen is first shown.
+  Future<void> _ensureCartLoaded() async {
+    final cart = CartService();
+    if (cart.currentUserEmail != null) return; // already loaded by login flow
+    final email = await AuthService.getUserEmail();
+    if (email != null) await cart.loadForUser(email);
+  }
+
+  void _onTabTap(int i) {
+    setState(() => _index = i);
+    if (i == 2) {
+      // Profile tab: always reload so order counts reflect latest data.
+      _profileKey.currentState?.reload();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -19,15 +47,15 @@ class _BuyerMainScreenState extends State<BuyerMainScreen> {
       backgroundColor: Colors.white,
       body: IndexedStack(
         index: _index,
-        children: const [
-          HomeScreen(),
-          ShopScreen(),
-          BuyerProfileScreen(),
+        children: [
+          const HomeScreen(),
+          const ShopScreen(),
+          BuyerProfileScreen(key: _profileKey),
         ],
       ),
       bottomNavigationBar: _BottomNav(
         currentIndex: _index,
-        onTap: (i) => setState(() => _index = i),
+        onTap: _onTabTap,
       ),
     );
   }

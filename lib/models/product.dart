@@ -46,6 +46,32 @@ class Product {
     return json['image_url'] as String? ?? '';
   }
 
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'price': price,
+        'description': description,
+        'category': category,
+        'imageUrl': imageUrl,
+        'sellerId': sellerId,
+        'sellerName': sellerName,
+        'sellerLogoUrl': sellerLogoUrl,
+        'stock': stock,
+      };
+
+  factory Product.fromCartJson(Map<String, dynamic> json) => Product(
+        id: json['id'],
+        name: json['name'] as String? ?? '',
+        price: (json['price'] as num?)?.toDouble() ?? 0.0,
+        description: json['description'] as String? ?? '',
+        category: json['category'] as String? ?? '',
+        imageUrl: json['imageUrl'] as String? ?? '',
+        sellerId: json['sellerId'],
+        sellerName: json['sellerName'] as String? ?? '',
+        sellerLogoUrl: json['sellerLogoUrl'] as String? ?? '',
+        stock: json['stock'] as int? ?? 0,
+      );
+
   Product copyWith({
     dynamic id,
     String? name,
@@ -91,4 +117,19 @@ class CartItem {
       '${product.id}|${selectedSize ?? ''}|${selectedColor ?? ''}';
 
   double getTotal() => product.price * quantity;
+
+  Map<String, dynamic> toJson() => {
+        'product': product.toJson(),
+        'quantity': quantity,
+        'selectedSize': selectedSize,
+        'selectedColor': selectedColor,
+      };
+
+  factory CartItem.fromJson(Map<String, dynamic> json) => CartItem(
+        product: Product.fromCartJson(
+            json['product'] as Map<String, dynamic>),
+        quantity: json['quantity'] as int? ?? 1,
+        selectedSize: json['selectedSize'] as String?,
+        selectedColor: json['selectedColor'] as String?,
+      );
 }

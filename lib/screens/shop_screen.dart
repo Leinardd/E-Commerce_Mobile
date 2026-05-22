@@ -28,6 +28,11 @@ class _ShopScreenState extends State<ShopScreen> {
   bool isLoading = true;
   String? errorMessage;
 
+  final TextEditingController _searchController = TextEditingController();
+  final FocusNode _searchFocusNode = FocusNode();
+  String _searchQuery = '';
+  bool _searchFocused = false;
+
   // ── Subcategory definitions (case-insensitive lookup via helpers below) ──────
   static const Map<String, List<String>> _subcategories = {
     'Tops': [
@@ -105,6 +110,16 @@ class _ShopScreenState extends State<ShopScreen> {
     cartService = CartService();
     if (widget.category != null) selectedCategory = widget.category!;
     _loadProducts();
+    _searchFocusNode.addListener(() {
+      setState(() => _searchFocused = _searchFocusNode.hasFocus);
+    });
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    _searchFocusNode.dispose();
+    super.dispose();
   }
 
   Future<void> _loadProducts() async {
@@ -144,26 +159,39 @@ class _ShopScreenState extends State<ShopScreen> {
   // ── Filtering ────────────────────────────────────────────────────────────────
 
   List<Product> get _filtered {
-    if (selectedCategory == 'All') return allProducts;
+    List<Product> result;
 
-    if (_selectedSubcategory != null) {
-      return allProducts
+    if (selectedCategory == 'All') {
+      result = allProducts;
+    } else if (_selectedSubcategory != null) {
+      result = allProducts
           .where((p) => p.category.toLowerCase() == _selectedSubcategory!.toLowerCase())
+          .toList();
+    } else {
+      final subs = _getSubs(selectedCategory);
+      if (subs != null) {
+        result = allProducts.where((p) {
+          final cat = p.category.toLowerCase();
+          return cat == selectedCategory.toLowerCase() ||
+              subs.any((s) => s.toLowerCase() == cat);
+        }).toList();
+      } else {
+        result = allProducts
+            .where((p) => p.category.toLowerCase() == selectedCategory.toLowerCase())
+            .toList();
+      }
+    }
+
+    if (_searchQuery.isNotEmpty) {
+      final q = _searchQuery.toLowerCase();
+      result = result
+          .where((p) =>
+              p.name.toLowerCase().contains(q) ||
+              p.category.toLowerCase().contains(q))
           .toList();
     }
 
-    final subs = _getSubs(selectedCategory);
-    if (subs != null) {
-      return allProducts.where((p) {
-        final cat = p.category.toLowerCase();
-        return cat == selectedCategory.toLowerCase() ||
-            subs.any((s) => s.toLowerCase() == cat);
-      }).toList();
-    }
-
-    return allProducts
-        .where((p) => p.category.toLowerCase() == selectedCategory.toLowerCase())
-        .toList();
+    return result;
   }
 
   String get _headerLabel {
@@ -378,6 +406,11 @@ class _ShopScreenState extends State<ShopScreen> {
                                 color: Color(0xFF856404), fontSize: 12)),
                       ),
 
+                    // ── Search bar + suggestions ──────────────────────────
+                    _buildSearchBar(),
+                    _buildSuggestions(),
+                    SizedBox(height: isMobile ? 16 : 24),
+
                     // ── Category navigation ───────────────────────────────
                     _buildCategorySection(isMobile),
 
@@ -409,6 +442,102 @@ class _ShopScreenState extends State<ShopScreen> {
               ),
             ),
     );
+  }
+
+  // ── Search bar ───────────────────────────────────────────────────────────────
+
+  Widget _buildSearchBar() {
+    return Container(
+      decoration: BoxDecoration(
+        color: _searchFocused ? Colors.white : const Color(0xFFF8F8F8),
+        border: Border.all(
+          color: _searchFocused ? const Color(0xFF0A0A0A) : const Color(0xFFE0E0E0),
+          width: _searchFocused ? 1.5 : 1,
+        ),
+      ),
+      child: TextField(
+        controller: _searchController,
+        focusNode: _searchFocusNode,
+        onChanged: (val) => setState(() => _searchQuery = val.trim()),
+        style: GoogleFonts.inter(fontSize: 13, color: const Color(0xFF0A0A0A)),
+        decoration: InputDecoration(
+          hintText: 'Search products, categories…',
+          hintStyle: GoogleFonts.inter(fontSize: 13, color: const Color(0xFFAAAAAA)),
+          prefixIcon: const Icon(Icons.search, size: 18, color: Color(0xFF888888)),
+          suffixIcon: _searchQuery.isNotEmpty
+              ? IconButton(
+                  icon: const Icon(Icons.close, size: 16, color: Color(0xFF888888)),
+                  onPressed: () {
+                    _searchController.clear();
+                    setState(() => _searchQuery = '');
+                  },
+                )
+              : null,
+          border: InputBorder.none,
+          contentPadding: const EdgeInsets.symmetric(vertical: 13),
+        ),
+      ),
+    );
+  }
+
+  // Flattened list of specific item types used as popular search hints
+  static final List<String> _popularSearches = _subcategories.values
+      .expand((list) => list)
+      .toList();
+
+  Widget _buildSuggestions() {
+    if (!_searchFocused) return const SizedBox.shrink();
+
+    // ── Empty query: show popular item-type searches ───────────────────────
+    if (_searchQuery.isEmpty) {
+      return _SuggestionPanel(children: [
+        const _SuggestionHeader('POPULAR SEARCHES'),
+        ..._popularSearches.take(8).map((term) => _SuggestionRow(
+              icon: Icons.trending_up_rounded,
+              text: term,
+              onTap: () {
+                _searchController.text = term;
+                setState(() => _searchQuery = term);
+                _searchFocusNode.unfocus();
+              },
+            )),
+      ]);
+    }
+
+    // ── Has query: show matching product names from DB ─────────────────────
+    final q = _searchQuery.toLowerCase();
+    final matches = allProducts
+        .where((p) =>
+            p.name.toLowerCase().contains(q) ||
+            p.category.toLowerCase().contains(q))
+        .take(7)
+        .toList();
+
+    if (matches.isEmpty) {
+      return _SuggestionPanel(children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          child: Text(
+            'No results for "$_searchQuery"',
+            style: GoogleFonts.inter(fontSize: 12, color: const Color(0xFF888888)),
+          ),
+        ),
+      ]);
+    }
+
+    return _SuggestionPanel(children: [
+      const _SuggestionHeader('SUGGESTIONS'),
+      ...matches.map((p) => _SuggestionRow(
+            icon: Icons.search,
+            text: p.name,
+            subtitle: p.category,
+            onTap: () {
+              _searchController.text = p.name;
+              setState(() => _searchQuery = p.name);
+              _searchFocusNode.unfocus();
+            },
+          )),
+    ]);
   }
 
   // ── Category section ─────────────────────────────────────────────────────────
@@ -1117,3 +1246,134 @@ class _HoverButtonState extends State<_HoverButton> {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Suggestion panel container
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _SuggestionPanel extends StatelessWidget {
+  final List<Widget> children;
+  const _SuggestionPanel({required this.children});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: const Color(0xFFE0E0E0), width: 1),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.07),
+            blurRadius: 16,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: children,
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Suggestion section header label
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _SuggestionHeader extends StatelessWidget {
+  final String label;
+  const _SuggestionHeader(this.label);
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
+      child: Text(
+        label,
+        style: GoogleFonts.commissioner(
+          fontSize: 8,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 2,
+          color: const Color(0xFF999999),
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Individual suggestion row
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _SuggestionRow extends StatefulWidget {
+  final IconData icon;
+  final String text;
+  final String? subtitle;
+  final VoidCallback onTap;
+
+  const _SuggestionRow({
+    required this.icon,
+    required this.text,
+    this.subtitle,
+    required this.onTap,
+  });
+
+  @override
+  State<_SuggestionRow> createState() => _SuggestionRowState();
+}
+
+class _SuggestionRowState extends State<_SuggestionRow> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 120),
+          color: _hovered ? const Color(0xFFF5F5F5) : Colors.white,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          child: Row(
+            children: [
+              Icon(widget.icon, size: 15, color: const Color(0xFF888888)),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      widget.text,
+                      style: GoogleFonts.inter(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                        color: const Color(0xFF0A0A0A),
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    if (widget.subtitle != null) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        widget.subtitle!,
+                        style: GoogleFonts.inter(
+                          fontSize: 11,
+                          color: const Color(0xFFAAAAAA),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              const Icon(Icons.north_west, size: 12, color: Color(0xFFCCCCCC)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}

@@ -1,15 +1,18 @@
 import 'dart:convert';
+import 'dart:developer' as developer;
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/order.dart';
+import '../models/product.dart';
 import '../services/address_service.dart';
 import '../services/auth_service.dart';
 import '../services/cart_service.dart';
 import '../services/order_service.dart';
-import '../services/seller_product_service.dart';
 
 class CheckoutScreen extends StatefulWidget {
-  const CheckoutScreen({super.key});
+  final List<CartItem> selectedItems;
+  const CheckoutScreen({super.key, required this.selectedItems});
 
   @override
   State<CheckoutScreen> createState() => _CheckoutScreenState();
@@ -34,11 +37,24 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   }
 
   Future<void> _loadSavedAddress() async {
-    final saved = await AddressService.loadAddress();
+    // Prefer Supabase (source of truth); fall back to local SharedPreferences.
+    Map<String, String>? saved = await AddressService.fetchFromSupabase();
+    if (saved != null && saved.values.every((v) => v.isEmpty)) saved = null;
+
+    if (saved != null) {
+      await AddressService.saveAddress(saved); // keep local cache in sync
+    } else {
+      saved = await AddressService.loadAddress();
+      if (saved != null && saved.values.every((v) => v.isEmpty)) saved = null;
+      // If found locally but not in Supabase yet, sync it up now.
+      if (saved != null) {
+        await AddressService.saveToSupabase(saved);
+      }
+    }
     if (mounted) {
       setState(() {
         _savedAddress = saved;
-        _deliveryAddress = saved; // pre-fill with signup address
+        _deliveryAddress = saved;
         _loadingAddress = false;
       });
     }
@@ -61,6 +77,9 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     );
     if (result != null && mounted) {
       setState(() => _deliveryAddress = result);
+      await AddressService.saveAddress(result);
+      await AddressService.saveToSupabase(result);
+      if (mounted) setState(() => _savedAddress = result);
     }
   }
 
@@ -77,13 +96,24 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     final buyerEmail = await AuthService.getUserEmail();
     if (buyerEmail == null) return;
 
-    final items = cartService.getCartItems();
+    final supabase = Supabase.instance.client;
 
-    for (final item in items) {
-      final sellerProduct =
-          await SellerProductService.getById('${item.product.id}');
-      final sellerEmail = sellerProduct?.sellerEmail;
-      if (sellerEmail == null || sellerEmail.isEmpty) continue;
+    for (final item in widget.selectedItems) {
+      // Look up the seller's contact email from the sellers table using
+      // the sellerId that is already stored on the Product object.
+      String sellerEmail = '';
+      try {
+        if (item.product.sellerId != null) {
+          final row = await supabase
+              .from('sellers')
+              .select('contact_email')
+              .eq('id', item.product.sellerId)
+              .maybeSingle();
+          sellerEmail = (row?['contact_email'] as String?) ?? '';
+        }
+      } catch (e) {
+        developer.log('[CheckoutScreen] fetchSellerEmail error: $e');
+      }
 
       await OrderService.place(Order(
         id: '${DateTime.now().millisecondsSinceEpoch}_${item.product.id}',
@@ -96,15 +126,16 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         quantity: item.quantity,
         deliveryAddress: addressStr,
         createdAt: DateTime.now(),
-        status: Order.toPay,
+        status: Order.toShip,
       ));
     }
-    cartService.clearCart();
+    // Cart items are intentionally kept after checkout so the buyer can
+    // re-order the same items without adding them again.
   }
 
   void _showOrderConfirmation() {
-    final cartItems = cartService.getCartItems();
-    final totalPrice = cartService.getTotalPrice();
+    final cartItems = widget.selectedItems;
+    final totalPrice = cartItems.fold<double>(0, (sum, i) => sum + i.getTotal());
     final addr = _deliveryAddress!;
     final nav = Navigator.of(context);
     final scaffold = ScaffoldMessenger.of(context);
@@ -300,8 +331,8 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   @override
   Widget build(BuildContext context) {
     final isMobile = MediaQuery.of(context).size.width < 768;
-    final cartItems = cartService.getCartItems();
-    final totalPrice = cartService.getTotalPrice();
+    final cartItems = widget.selectedItems;
+    final totalPrice = cartItems.fold<double>(0, (sum, i) => sum + i.getTotal());
 
     return Scaffold(
       backgroundColor: Colors.white,

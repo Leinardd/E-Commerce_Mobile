@@ -17,11 +17,11 @@ class _BuyerOrdersScreenState extends State<BuyerOrdersScreen> {
 
   static const _filters = [
     ('all', 'ALL'),
-    (Order.toPay, 'TO PAY'),
     (Order.toShip, 'TO SHIP'),
     (Order.shipped, 'SHIPPED'),
     (Order.toReceive, 'TO RECEIVE'),
     (Order.completed, 'COMPLETED'),
+    (Order.cancelled, 'CANCELLED'),
   ];
 
   @override
@@ -41,9 +41,13 @@ class _BuyerOrdersScreenState extends State<BuyerOrdersScreen> {
     });
   }
 
+  // toPay is a legacy status — treat it the same as toShip in all filters.
+  static String _normalise(String status) =>
+      status == Order.toPay ? Order.toShip : status;
+
   List<Order> get _filtered => _filter == 'all'
       ? _orders
-      : _orders.where((o) => o.status == _filter).toList();
+      : _orders.where((o) => _normalise(o.status) == _filter).toList();
 
   Future<void> _confirmReceipt(Order order) async {
     await OrderService.updateStatus(order.id, Order.completed);
@@ -52,6 +56,71 @@ class _BuyerOrdersScreenState extends State<BuyerOrdersScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
         content: Text('Receipt confirmed — thank you for your order!'),
+        backgroundColor: Color(0xFF0A0A0A),
+        behavior: SnackBarBehavior.floating,
+        margin: EdgeInsets.all(16),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+      ),
+    );
+  }
+
+  Future<void> _cancelOrder(Order order) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+        title: const Text(
+          'CANCEL ORDER',
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 2.5,
+            color: Color(0xFF0A0A0A),
+          ),
+        ),
+        content: const Text(
+          'Are you sure you want to cancel this order?',
+          style: TextStyle(fontSize: 13, color: Color(0xFF555555)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text(
+              'KEEP ORDER',
+              style: TextStyle(
+                fontSize: 9,
+                letterSpacing: 1.5,
+                color: Color(0xFF888888),
+              ),
+            ),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF0A0A0A),
+              foregroundColor: Colors.white,
+              elevation: 0,
+              shape: const RoundedRectangleBorder(
+                  borderRadius: BorderRadius.zero),
+            ),
+            child: const Text(
+              'YES, CANCEL',
+              style: TextStyle(
+                  fontSize: 9,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 1.5),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+    await OrderService.updateStatus(order.id, Order.cancelled);
+    _load();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Order cancelled.'),
         backgroundColor: Color(0xFF0A0A0A),
         behavior: SnackBarBehavior.floating,
         margin: EdgeInsets.all(16),
@@ -262,6 +331,33 @@ class _BuyerOrdersScreenState extends State<BuyerOrdersScreen> {
           const SizedBox(height: 16),
           _progressBar(order.status),
 
+          // Cancel button — only while order hasn't been shipped yet
+          if (order.status == Order.toPay ||
+              order.status == Order.toShip) ...[
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton(
+                onPressed: () => _cancelOrder(order),
+                style: OutlinedButton.styleFrom(
+                  side: const BorderSide(color: Color(0xFFCCCCCC)),
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: const RoundedRectangleBorder(
+                      borderRadius: BorderRadius.zero),
+                ),
+                child: const Text(
+                  'CANCEL ORDER',
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 2,
+                    color: Color(0xFF888888),
+                  ),
+                ),
+              ),
+            ),
+          ],
+
           // Confirm receipt button — shown when seller has marked out for delivery
           if (order.status == Order.toReceive) ...[
             const SizedBox(height: 16),
@@ -319,15 +415,39 @@ class _BuyerOrdersScreenState extends State<BuyerOrdersScreen> {
   }
 
   Widget _progressBar(String status) {
+    // Cancelled orders don't show a progress bar
+    if (status == Order.cancelled) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        color: const Color(0xFFFFEEEE),
+        child: const Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.cancel_outlined, size: 13, color: Color(0xFFCC0000)),
+            SizedBox(width: 6),
+            Text(
+              'ORDER CANCELLED',
+              style: TextStyle(
+                fontSize: 8,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 1.5,
+                color: Color(0xFFCC0000),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
     final steps = [
-      Order.toPay,
       Order.toShip,
       Order.shipped,
       Order.toReceive,
       Order.completed,
     ];
-    final labels = ['PAID', 'TO SHIP', 'SHIPPED', 'DELIVERING', 'DONE'];
-    final current = steps.indexOf(status);
+    final labels = ['TO SHIP', 'SHIPPED', 'DELIVERING', 'DONE'];
+    // toPay maps to the same step as toShip
+    final current = steps.indexOf(_normalise(status));
 
     return Row(
       children: List.generate(steps.length, (i) {
@@ -380,17 +500,31 @@ class _BuyerOrdersScreenState extends State<BuyerOrdersScreen> {
   }
 
   Widget _statusBadge(String status) {
-    final isComplete = status == Order.completed;
+    final display = _normalise(status);
+    final isComplete = display == Order.completed;
+    final isCancelled = display == Order.cancelled;
+    final Color bg;
+    final Color fg;
+    if (isComplete) {
+      bg = const Color(0xFF0A0A0A);
+      fg = Colors.white;
+    } else if (isCancelled) {
+      bg = const Color(0xFFFFEEEE);
+      fg = const Color(0xFFCC0000);
+    } else {
+      bg = const Color(0xFFF0F0F0);
+      fg = const Color(0xFF555555);
+    }
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      color: isComplete ? const Color(0xFF0A0A0A) : const Color(0xFFF0F0F0),
+      color: bg,
       child: Text(
-        Order.statusLabel(status).toUpperCase(),
+        Order.statusLabel(display).toUpperCase(),
         style: TextStyle(
           fontSize: 7,
           fontWeight: FontWeight.w700,
           letterSpacing: 1,
-          color: isComplete ? Colors.white : const Color(0xFF555555),
+          color: fg,
         ),
       ),
     );

@@ -177,8 +177,16 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
           cartService.addToCart(widget.product,
               selectedSize: size, selectedColor: color);
         }
-        Navigator.of(context)
-            .push(MaterialPageRoute(builder: (_) => const CheckoutScreen()));
+        final variantKey = CartItem(
+                product: widget.product,
+                selectedSize: size,
+                selectedColor: color)
+            .variantKey;
+        final cartItem = cartService
+            .getCartItems()
+            .firstWhere((i) => i.variantKey == variantKey);
+        Navigator.of(context).push(MaterialPageRoute(
+            builder: (_) => CheckoutScreen(selectedItems: [cartItem])));
       },
       onBuyNow: (size, color, qty) {
         setState(() {
@@ -190,8 +198,16 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
           cartService.addToCart(widget.product,
               selectedSize: size, selectedColor: color);
         }
-        Navigator.of(context)
-            .push(MaterialPageRoute(builder: (_) => const CheckoutScreen()));
+        final variantKey = CartItem(
+                product: widget.product,
+                selectedSize: size,
+                selectedColor: color)
+            .variantKey;
+        final cartItem = cartService
+            .getCartItems()
+            .firstWhere((i) => i.variantKey == variantKey);
+        Navigator.of(context).push(MaterialPageRoute(
+            builder: (_) => CheckoutScreen(selectedItems: [cartItem])));
       },
     );
   }

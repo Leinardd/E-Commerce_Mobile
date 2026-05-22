@@ -4,6 +4,7 @@ import 'io_shim.dart' if (dart.library.html) 'io_shim_web.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../config/supabase_config.dart';
 import 'address_service.dart';
+import 'cart_service.dart';
 
 class AuthService {
   static const _loginKey      = 'is_logged_in';
@@ -37,6 +38,7 @@ class AuthService {
     await prefs.remove(_userEmailKey);
     await prefs.remove(_userIdKey);
     await AddressService.clearAddress();
+    CartService().clearInMemory(); // clear in-memory cart; ShPrefs data kept for re-login
   }
 
   // ─── Login ─────────────────────────────────────────────────────────────────
@@ -103,7 +105,7 @@ class AuthService {
           await prefs.setBool(_loginKey, true);
           await prefs.setString(_userEmailKey, email.trim());
           await prefs.remove(_userIdKey);
-          
+          await CartService().loadForUser(email.trim());
           developer.log('✅ PARTIAL LOGIN SUCCESS (profile created or will be created later)');
           return null;
         }
@@ -136,6 +138,7 @@ class AuthService {
           }
         }
 
+        await CartService().loadForUser(email.trim());
         developer.log('═══════════════════════════════════════');
         developer.log('✅ LOGIN SUCCESSFUL!');
         developer.log('Email: $email');
@@ -158,6 +161,7 @@ class AuthService {
         await prefs.setBool(_loginKey, true);
         await prefs.setString(_userEmailKey, email.trim());
         await prefs.remove(_userIdKey);
+        await CartService().loadForUser(email.trim());
         return null; // Allow login to proceed
       }
       
@@ -370,6 +374,15 @@ class AuthService {
             if (e.code != '23505') {
               developer.log('Profile insert after OTP error: ${e.message}');
             }
+          }
+
+          // Session is active — sync the locally saved address to Supabase
+          // before we sign out, so it persists across devices and app restarts.
+          final localAddress = await AddressService.loadAddress();
+          if (localAddress != null &&
+              localAddress.values.any((v) => v.isNotEmpty)) {
+            await AddressService.saveToSupabase(localAddress);
+            developer.log('Address synced to Supabase during OTP verification');
           }
         }
         // Sign out after verification so user must log in manually.
