@@ -11,6 +11,7 @@ import '../services/cart_service.dart';
 import '../services/order_service.dart';
 import '../services/product_service.dart';
 import '../widgets/variant_picker_sheet.dart';
+import 'chat_conversation_screen.dart';
 import 'checkout_screen.dart';
 import 'seller_store_screen.dart';
 
@@ -83,6 +84,34 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
     if (raw == null || !mounted) return;
     final list = (jsonDecode(raw) as List).cast<Map<String, dynamic>>();
     setState(() => _reviews = list);
+  }
+
+  Future<void> _messageSeller() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final buyerEmail = await AuthService.getUserEmail();
+    if (buyerEmail == null || !mounted) return;
+    final sellerEmail =
+        await ProductService.getSellerEmailById(widget.product.sellerId);
+    if (sellerEmail == null) {
+      messenger.showSnackBar(const SnackBar(
+        content: Text('Unable to reach seller at this time.'),
+        backgroundColor: Color(0xFF0A0A0A),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+        margin: EdgeInsets.all(16),
+      ));
+      return;
+    }
+    if (!mounted) return;
+    await openConversation(
+      context,
+      currentEmail: buyerEmail,
+      currentRole: 'buyer',
+      sellerEmail: sellerEmail,
+      sellerId: widget.product.sellerId?.toString() ?? '',
+      sellerName: widget.product.sellerName,
+      productRef: widget.product,
+    );
   }
 
   Future<void> _loadSellerProfile() async {
@@ -583,6 +612,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                     sellerLogoUrl: (_sellerProfile?['logo_url'] as String?)
                         ?? (_sellerProfile?['avatar_url'] as String?)
                         ?? widget.product.sellerLogoUrl,
+                    onMessage: _messageSeller,
                   ),
                   const SizedBox(height: 40),
 
@@ -905,11 +935,13 @@ class _SellerSection extends StatelessWidget {
   final dynamic sellerId;
   final String sellerName;
   final String sellerLogoUrl;
+  final VoidCallback? onMessage;
 
   const _SellerSection({
     required this.sellerId,
     required this.sellerName,
     required this.sellerLogoUrl,
+    this.onMessage,
   });
 
   void _goToStore(BuildContext context) {
@@ -1009,27 +1041,58 @@ class _SellerSection extends StatelessWidget {
                         overflow: TextOverflow.ellipsis,
                       ),
                       const SizedBox(height: 10),
-                      OutlinedButton(
-                        onPressed: () => _goToStore(context),
-                        style: OutlinedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 16, vertical: 8),
-                          foregroundColor: const Color(0xFF0A0A0A),
-                          side: const BorderSide(
-                              color: Color(0xFF0A0A0A), width: 1),
-                          shape: const RoundedRectangleBorder(
-                              borderRadius: BorderRadius.zero),
-                          minimumSize: Size.zero,
-                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        ),
-                        child: Text(
-                          'VISIT SHOP',
-                          style: GoogleFonts.commissioner(
-                            fontSize: 9,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 2,
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          OutlinedButton(
+                            onPressed: () => _goToStore(context),
+                            style: OutlinedButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 16, vertical: 8),
+                              foregroundColor: const Color(0xFF0A0A0A),
+                              side: const BorderSide(
+                                  color: Color(0xFF0A0A0A), width: 1),
+                              shape: const RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.zero),
+                              minimumSize: Size.zero,
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            ),
+                            child: Text(
+                              'VISIT SHOP',
+                              style: GoogleFonts.commissioner(
+                                fontSize: 9,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 2,
+                              ),
+                            ),
                           ),
-                        ),
+                          if (onMessage != null)
+                            OutlinedButton.icon(
+                              onPressed: onMessage,
+                              icon: const Icon(Icons.chat_bubble_outline,
+                                  size: 11),
+                              label: Text(
+                                'MESSAGE',
+                                style: GoogleFonts.commissioner(
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.w700,
+                                  letterSpacing: 2,
+                                ),
+                              ),
+                              style: OutlinedButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 16, vertical: 8),
+                                foregroundColor: const Color(0xFF0A0A0A),
+                                side: const BorderSide(
+                                    color: Color(0xFF0A0A0A), width: 1),
+                                shape: const RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.zero),
+                                minimumSize: Size.zero,
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              ),
+                            ),
+                        ],
                       ),
                     ],
                   ),

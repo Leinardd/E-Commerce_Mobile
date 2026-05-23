@@ -6,6 +6,8 @@ import '../../services/order_service.dart';
 import '../../services/seller_auth_service.dart';
 import '../../services/seller_product_service.dart';
 import '../../services/unified_auth_service.dart';
+import '../../services/chat_service.dart';
+import 'seller_chat_inbox_screen.dart';
 import 'seller_notifications_screen.dart';
 import 'seller_orders_screen.dart';
 import 'seller_products_screen.dart';
@@ -26,13 +28,18 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen> {
   List<Order> _recentOrders = [];
   bool _loading = true;
   int _unreadNotifications = 0;
+  int _chatUnreadCount = 0;
 
   static const _statusColors = {
-    Order.toPay: Color(0xFFF59E0B),
-    Order.toShip: Color(0xFF3B82F6),
-    Order.shipped: Color(0xFF6366F1),
-    Order.toReceive: Color(0xFF14B8A6),
-    Order.completed: Color(0xFF10B981),
+    Order.pending:        Color(0xFFF59E0B),
+    Order.confirmed:      Color(0xFF3B82F6),
+    Order.preparing:      Color(0xFF6366F1),
+    Order.readyForPickup: Color(0xFF8B5CF6),
+    Order.shipped:        Color(0xFF14B8A6),
+    Order.outForDelivery: Color(0xFF0EA5E9),
+    Order.delivered:      Color(0xFF10B981),
+    Order.completed:      Color(0xFF10B981),
+    Order.cancelled:      Color(0xFFEF4444),
   };
 
   @override
@@ -76,6 +83,7 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen> {
       OrderService.sellerRevenue(resolvedEmail),
       OrderService.getBySeller(resolvedEmail),
       NotificationService.getUnreadCount(),
+      ChatService().getSellerTotalUnread(resolvedEmail),
     ]);
 
     if (!mounted) return;
@@ -87,6 +95,7 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen> {
       _revenue = results[3] as double;
       _recentOrders = (results[4] as List<Order>).take(5).toList();
       _unreadNotifications = results[5] as int;
+      _chatUnreadCount = results[6] as int;
       _loading = false;
     });
   }
@@ -285,11 +294,24 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen> {
               icon: Icons.receipt_long_outlined,
               title: 'Orders',
               subtitle: 'View & update order status',
-              count: _statusCounts[Order.toShip] ?? 0,
-              countLabel: 'to ship',
+              count: _statusCounts[Order.pending] ?? 0,
+              countLabel: 'pending',
               onTap: () => Navigator.of(context)
                   .push(MaterialPageRoute(
                     builder: (_) => const SellerOrdersScreen(),
+                  ))
+                  .then((_) => _load()),
+            ),
+            const SizedBox(height: 10),
+            _actionCard(
+              icon: Icons.chat_bubble_outline,
+              title: 'Chat Inbox',
+              subtitle: 'Reply to buyer messages',
+              count: _chatUnreadCount,
+              countLabel: 'unread',
+              onTap: () => Navigator.of(context)
+                  .push(MaterialPageRoute(
+                    builder: (_) => const SellerChatInboxScreen(),
                   ))
                   .then((_) => _load()),
             ),
@@ -419,9 +441,9 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen> {
         ),
         const SizedBox(width: 10),
         _statCard(
-          label: 'TO SHIP',
-          value: '${_statusCounts[Order.toShip] ?? 0}',
-          icon: Icons.local_shipping_outlined,
+          label: 'PENDING',
+          value: '${_statusCounts[Order.pending] ?? 0}',
+          icon: Icons.hourglass_top_outlined,
           color: const Color(0xFFF59E0B),
         ),
       ],
@@ -480,11 +502,11 @@ class _SellerDashboardScreenState extends State<SellerDashboardScreen> {
 
   Widget _orderStatusCard() {
     final statuses = [
-      (Order.toPay, Icons.credit_card_outlined, 'TO PAY'),
-      (Order.toShip, Icons.inventory_2_outlined, 'TO SHIP'),
-      (Order.shipped, Icons.local_shipping_outlined, 'SHIPPED'),
-      (Order.toReceive, Icons.move_to_inbox_outlined, 'RECEIVED'),
-      (Order.completed, Icons.check_circle_outline, 'DONE'),
+      (Order.pending,        Icons.hourglass_top_outlined,       'PENDING'),
+      (Order.confirmed,      Icons.check_outlined,               'CONFIRMED'),
+      (Order.preparing,      Icons.inventory_2_outlined,         'PREPARING'),
+      (Order.readyForPickup, Icons.local_shipping_outlined,      'READY'),
+      (Order.completed,      Icons.check_circle_outline,         'DONE'),
     ];
     return Container(
       decoration: BoxDecoration(

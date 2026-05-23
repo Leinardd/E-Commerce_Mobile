@@ -15,13 +15,23 @@ class _BuyerOrdersScreenState extends State<BuyerOrdersScreen> {
   List<Order> _orders = [];
   bool _loading = true;
 
+  // Tab key → matching statuses
+  static const _tabStatuses = <String, List<String>>{
+    'all':       [],
+    'to_ship':   [Order.pending, Order.confirmed, Order.preparing],
+    'shipped':   [Order.readyForPickup, Order.shipped],
+    'to_receive':[Order.outForDelivery],
+    'completed': [Order.delivered, Order.completed],
+    'cancelled': [Order.cancelled],
+  };
+
   static const _filters = [
-    ('all', 'ALL'),
-    (Order.toShip, 'TO SHIP'),
-    (Order.shipped, 'SHIPPED'),
-    (Order.toReceive, 'TO RECEIVE'),
-    (Order.completed, 'COMPLETED'),
-    (Order.cancelled, 'CANCELLED'),
+    ('all',        'ALL'),
+    ('to_ship',    'TO SHIP'),
+    ('shipped',    'SHIPPED'),
+    ('to_receive', 'TO RECEIVE'),
+    ('completed',  'COMPLETED'),
+    ('cancelled',  'CANCELLED'),
   ];
 
   @override
@@ -31,8 +41,12 @@ class _BuyerOrdersScreenState extends State<BuyerOrdersScreen> {
   }
 
   Future<void> _load() async {
+    setState(() => _loading = true);
     final email = await AuthService.getUserEmail();
-    if (email == null) return;
+    if (email == null) {
+      if (mounted) setState(() => _loading = false);
+      return;
+    }
     final orders = await OrderService.getByBuyer(email);
     if (!mounted) return;
     setState(() {
@@ -41,13 +55,11 @@ class _BuyerOrdersScreenState extends State<BuyerOrdersScreen> {
     });
   }
 
-  // toPay is a legacy status — treat it the same as toShip in all filters.
-  static String _normalise(String status) =>
-      status == Order.toPay ? Order.toShip : status;
-
-  List<Order> get _filtered => _filter == 'all'
-      ? _orders
-      : _orders.where((o) => _normalise(o.status) == _filter).toList();
+  List<Order> get _filtered {
+    if (_filter == 'all') return _orders;
+    final statuses = _tabStatuses[_filter] ?? [];
+    return _orders.where((o) => statuses.contains(o.status)).toList();
+  }
 
   Future<void> _confirmReceipt(Order order) async {
     await OrderService.updateStatus(order.id, Order.completed);
@@ -87,11 +99,7 @@ class _BuyerOrdersScreenState extends State<BuyerOrdersScreen> {
             onPressed: () => Navigator.of(ctx).pop(false),
             child: const Text(
               'KEEP ORDER',
-              style: TextStyle(
-                fontSize: 9,
-                letterSpacing: 1.5,
-                color: Color(0xFF888888),
-              ),
+              style: TextStyle(fontSize: 9, letterSpacing: 1.5, color: Color(0xFF888888)),
             ),
           ),
           ElevatedButton(
@@ -100,15 +108,11 @@ class _BuyerOrdersScreenState extends State<BuyerOrdersScreen> {
               backgroundColor: const Color(0xFF0A0A0A),
               foregroundColor: Colors.white,
               elevation: 0,
-              shape: const RoundedRectangleBorder(
-                  borderRadius: BorderRadius.zero),
+              shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
             ),
             child: const Text(
               'YES, CANCEL',
-              style: TextStyle(
-                  fontSize: 9,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 1.5),
+              style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700, letterSpacing: 1.5),
             ),
           ),
         ],
@@ -139,8 +143,7 @@ class _BuyerOrdersScreenState extends State<BuyerOrdersScreen> {
         backgroundColor: Colors.white,
         elevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new,
-              color: Color(0xFF0A0A0A), size: 16),
+          icon: const Icon(Icons.arrow_back_ios_new, color: Color(0xFF0A0A0A), size: 16),
           onPressed: () => Navigator.of(context).pop(),
         ),
         title: const Text(
@@ -154,12 +157,7 @@ class _BuyerOrdersScreenState extends State<BuyerOrdersScreen> {
         ),
       ),
       body: _loading
-          ? const Center(
-              child: CircularProgressIndicator(
-                strokeWidth: 1.5,
-                color: Color(0xFF0A0A0A),
-              ),
-            )
+          ? const Center(child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF0A0A0A)))
           : Column(
               children: [
                 // Filter tabs
@@ -167,8 +165,7 @@ class _BuyerOrdersScreenState extends State<BuyerOrdersScreen> {
                   color: Colors.white,
                   child: SingleChildScrollView(
                     scrollDirection: Axis.horizontal,
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 16, vertical: 12),
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                     child: Row(
                       children: _filters.map((f) {
                         final active = _filter == f.$1;
@@ -176,24 +173,19 @@ class _BuyerOrdersScreenState extends State<BuyerOrdersScreen> {
                           onTap: () => setState(() => _filter = f.$1),
                           child: Container(
                             margin: const EdgeInsets.only(right: 8),
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 14, vertical: 7),
+                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
                             decoration: active
-                                ? const BoxDecoration(
-                                    color: Color(0xFF0A0A0A))
+                                ? const BoxDecoration(color: Color(0xFF0A0A0A))
                                 : BoxDecoration(
                                     color: Colors.transparent,
-                                    border: Border.all(
-                                        color: const Color(0xFFDDDDDD))),
+                                    border: Border.all(color: const Color(0xFFDDDDDD))),
                             child: Text(
                               f.$2,
                               style: TextStyle(
                                 fontSize: 8,
                                 fontWeight: FontWeight.w700,
                                 letterSpacing: 1.5,
-                                color: active
-                                    ? Colors.white
-                                    : const Color(0xFF555555),
+                                color: active ? Colors.white : const Color(0xFF555555),
                               ),
                             ),
                           ),
@@ -203,15 +195,13 @@ class _BuyerOrdersScreenState extends State<BuyerOrdersScreen> {
                   ),
                 ),
                 Container(height: 1, color: const Color(0xFFEEEEEE)),
-
                 Expanded(
                   child: _filtered.isEmpty
                       ? const Center(
                           child: Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              Icon(Icons.receipt_long_outlined,
-                                  size: 48, color: Color(0xFFCCCCCC)),
+                              Icon(Icons.receipt_long_outlined, size: 48, color: Color(0xFFCCCCCC)),
                               SizedBox(height: 20),
                               Text(
                                 'NO ORDERS',
@@ -225,8 +215,7 @@ class _BuyerOrdersScreenState extends State<BuyerOrdersScreen> {
                               SizedBox(height: 8),
                               Text(
                                 'Your orders will appear here',
-                                style: TextStyle(
-                                    fontSize: 12, color: Color(0xFFBBBBBB)),
+                                style: TextStyle(fontSize: 12, color: Color(0xFFBBBBBB)),
                               ),
                             ],
                           ),
@@ -240,10 +229,8 @@ class _BuyerOrdersScreenState extends State<BuyerOrdersScreen> {
                               vertical: 20,
                             ),
                             itemCount: _filtered.length,
-                            separatorBuilder: (_, __) =>
-                                const SizedBox(height: 12),
-                            itemBuilder: (_, i) =>
-                                _orderCard(_filtered[i], isMobile),
+                            separatorBuilder: (_, __) => const SizedBox(height: 12),
+                            itemBuilder: (_, i) => _orderCard(_filtered[i]),
                           ),
                         ),
                 ),
@@ -252,7 +239,7 @@ class _BuyerOrdersScreenState extends State<BuyerOrdersScreen> {
     );
   }
 
-  Widget _orderCard(Order order, bool isMobile) {
+  Widget _orderCard(Order order) {
     return Container(
       color: Colors.white,
       padding: const EdgeInsets.all(20),
@@ -263,7 +250,9 @@ class _BuyerOrdersScreenState extends State<BuyerOrdersScreen> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
-                'ORDER #${order.id.substring(order.id.length > 6 ? order.id.length - 6 : 0)}',
+                order.id.length > 8
+                    ? 'ORDER #${order.id.substring(order.id.length - 8).toUpperCase()}'
+                    : 'ORDER #${order.id.toUpperCase()}',
                 style: const TextStyle(
                   fontSize: 9,
                   fontWeight: FontWeight.w700,
@@ -287,10 +276,8 @@ class _BuyerOrdersScreenState extends State<BuyerOrdersScreen> {
                   child: Image.network(
                     order.productImageUrl,
                     fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => const Icon(
-                        Icons.image_outlined,
-                        color: Color(0xFFCCCCCC),
-                        size: 20),
+                    errorBuilder: (_, __, ___) =>
+                        const Icon(Icons.image_outlined, color: Color(0xFFCCCCCC), size: 20),
                   ),
                 ),
               Expanded(
@@ -308,8 +295,7 @@ class _BuyerOrdersScreenState extends State<BuyerOrdersScreen> {
                     const SizedBox(height: 4),
                     Text(
                       'Qty: ${order.quantity}  ·  ₱${order.total.toStringAsFixed(0)}',
-                      style: const TextStyle(
-                          fontSize: 11, color: Color(0xFF777777)),
+                      style: const TextStyle(fontSize: 11, color: Color(0xFF777777)),
                     ),
                   ],
                 ),
@@ -327,13 +313,12 @@ class _BuyerOrdersScreenState extends State<BuyerOrdersScreen> {
             '${order.createdAt.day}/${order.createdAt.month}/${order.createdAt.year}',
           ),
 
-          // Delivery progress indicator
+          // Progress bar
           const SizedBox(height: 16),
           _progressBar(order.status),
 
-          // Cancel button — only while order hasn't been shipped yet
-          if (order.status == Order.toPay ||
-              order.status == Order.toShip) ...[
+          // Cancel — only while pending (before seller confirms)
+          if (order.status == Order.pending) ...[
             const SizedBox(height: 16),
             SizedBox(
               width: double.infinity,
@@ -342,8 +327,7 @@ class _BuyerOrdersScreenState extends State<BuyerOrdersScreen> {
                 style: OutlinedButton.styleFrom(
                   side: const BorderSide(color: Color(0xFFCCCCCC)),
                   padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: const RoundedRectangleBorder(
-                      borderRadius: BorderRadius.zero),
+                  shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
                 ),
                 child: const Text(
                   'CANCEL ORDER',
@@ -358,8 +342,8 @@ class _BuyerOrdersScreenState extends State<BuyerOrdersScreen> {
             ),
           ],
 
-          // Confirm receipt button — shown when seller has marked out for delivery
-          if (order.status == Order.toReceive) ...[
+          // Confirm receipt — when delivered
+          if (order.status == Order.delivered) ...[
             const SizedBox(height: 16),
             SizedBox(
               width: double.infinity,
@@ -370,16 +354,11 @@ class _BuyerOrdersScreenState extends State<BuyerOrdersScreen> {
                   foregroundColor: Colors.white,
                   elevation: 0,
                   padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: const RoundedRectangleBorder(
-                      borderRadius: BorderRadius.zero),
+                  shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
                 ),
                 child: const Text(
                   'ORDER RECEIVED',
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 2,
-                  ),
+                  style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, letterSpacing: 2),
                 ),
               ),
             ),
@@ -393,8 +372,7 @@ class _BuyerOrdersScreenState extends State<BuyerOrdersScreen> {
               color: const Color(0xFF0A0A0A),
               child: const Row(
                 children: [
-                  Icon(Icons.check_circle_outline,
-                      color: Colors.white, size: 14),
+                  Icon(Icons.check_circle_outline, color: Colors.white, size: 14),
                   SizedBox(width: 8),
                   Text(
                     'DELIVERED — TRANSACTION COMPLETE',
@@ -415,7 +393,6 @@ class _BuyerOrdersScreenState extends State<BuyerOrdersScreen> {
   }
 
   Widget _progressBar(String status) {
-    // Cancelled orders don't show a progress bar
     if (status == Order.cancelled) {
       return Container(
         width: double.infinity,
@@ -439,15 +416,41 @@ class _BuyerOrdersScreenState extends State<BuyerOrdersScreen> {
         ),
       );
     }
-    final steps = [
-      Order.toShip,
-      Order.shipped,
-      Order.toReceive,
-      Order.completed,
-    ];
-    final labels = ['TO SHIP', 'SHIPPED', 'DELIVERING', 'DONE'];
-    // toPay maps to the same step as toShip
-    final current = steps.indexOf(_normalise(status));
+
+    // 4 visual steps
+    const steps = ['placed', 'preparing', 'delivering', 'done'];
+    const labels = ['PLACED', 'PREPARING', 'DELIVERING', 'DONE'];
+
+    int currentStep(String s) {
+      switch (s) {
+        case Order.pending:
+        case Order.confirmed:
+          return 0;
+        case Order.preparing:
+        case Order.readyForPickup:
+        case Order.shipped:
+          return 1;
+        case Order.outForDelivery:
+        case Order.delivered:
+          return 2;
+        case Order.completed:
+          return 3;
+        // Legacy
+        case Order.toPay:
+        case Order.toShip:
+          return 0;
+        case Order.toReceive:
+        case Order.riderAccepted:
+        case Order.pickedUp:
+        case Order.inTransit:
+        case Order.nearLocation:
+          return 2;
+        default:
+          return 0;
+      }
+    }
+
+    final current = currentStep(status);
 
     return Row(
       children: List.generate(steps.length, (i) {
@@ -463,9 +466,7 @@ class _BuyerOrdersScreenState extends State<BuyerOrdersScreen> {
                     height: 8,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color: done
-                          ? const Color(0xFF0A0A0A)
-                          : const Color(0xFFDDDDDD),
+                      color: done ? const Color(0xFF0A0A0A) : const Color(0xFFDDDDDD),
                     ),
                   ),
                   const SizedBox(height: 4),
@@ -475,9 +476,7 @@ class _BuyerOrdersScreenState extends State<BuyerOrdersScreen> {
                       fontSize: 6,
                       fontWeight: FontWeight.w600,
                       letterSpacing: 0.5,
-                      color: done
-                          ? const Color(0xFF0A0A0A)
-                          : const Color(0xFFCCCCCC),
+                      color: done ? const Color(0xFF0A0A0A) : const Color(0xFFCCCCCC),
                     ),
                   ),
                 ],
@@ -487,9 +486,7 @@ class _BuyerOrdersScreenState extends State<BuyerOrdersScreen> {
                   child: Container(
                     height: 1,
                     margin: const EdgeInsets.only(bottom: 16),
-                    color: i < current
-                        ? const Color(0xFF0A0A0A)
-                        : const Color(0xFFDDDDDD),
+                    color: i < current ? const Color(0xFF0A0A0A) : const Color(0xFFDDDDDD),
                   ),
                 ),
             ],
@@ -500,26 +497,30 @@ class _BuyerOrdersScreenState extends State<BuyerOrdersScreen> {
   }
 
   Widget _statusBadge(String status) {
-    final display = _normalise(status);
-    final isComplete = display == Order.completed;
-    final isCancelled = display == Order.cancelled;
     final Color bg;
     final Color fg;
-    if (isComplete) {
-      bg = const Color(0xFF0A0A0A);
-      fg = Colors.white;
-    } else if (isCancelled) {
-      bg = const Color(0xFFFFEEEE);
-      fg = const Color(0xFFCC0000);
-    } else {
-      bg = const Color(0xFFF0F0F0);
-      fg = const Color(0xFF555555);
+    switch (status) {
+      case Order.completed:
+        bg = const Color(0xFF0A0A0A);
+        fg = Colors.white;
+      case Order.cancelled:
+        bg = const Color(0xFFFFEEEE);
+        fg = const Color(0xFFCC0000);
+      case Order.delivered:
+        bg = const Color(0xFFE8F5E9);
+        fg = const Color(0xFF2E7D32);
+      case Order.outForDelivery:
+        bg = const Color(0xFFE3F2FD);
+        fg = const Color(0xFF1565C0);
+      default:
+        bg = const Color(0xFFF0F0F0);
+        fg = const Color(0xFF555555);
     }
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       color: bg,
       child: Text(
-        Order.statusLabel(display).toUpperCase(),
+        Order.statusLabel(status).toUpperCase(),
         style: TextStyle(
           fontSize: 7,
           fontWeight: FontWeight.w700,

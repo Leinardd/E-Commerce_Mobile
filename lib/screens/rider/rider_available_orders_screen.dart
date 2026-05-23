@@ -77,6 +77,23 @@ class _RiderAvailableOrdersScreenState
             color: Colors.white,
           ),
         ),
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(32),
+          child: Container(
+            color: const Color(0xFF1A1A1A),
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+            child: Row(
+              children: [
+                const Icon(Icons.local_shipping_outlined, size: 13, color: Color(0xFF888888)),
+                const SizedBox(width: 6),
+                Text(
+                  'Orders ready for pickup from seller',
+                  style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF888888)),
+                ),
+              ],
+            ),
+          ),
+        ),
         actions: [
           IconButton(
             onPressed: _load,

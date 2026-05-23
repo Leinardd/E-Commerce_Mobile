@@ -19,42 +19,32 @@ class _RiderDeliveryDetailScreenState
   bool _updating = false;
 
   static const List<String> _flow = [
-    Order.riderAccepted,
-    Order.pickedUp,
-    Order.inTransit,
-    Order.nearLocation,
+    Order.shipped,
+    Order.outForDelivery,
     Order.delivered,
   ];
 
   static const Map<String, String> _stepLabels = {
-    Order.riderAccepted: 'Order Accepted',
-    Order.pickedUp: 'Picked Up',
-    Order.inTransit: 'In Transit',
-    Order.nearLocation: 'Near Location',
-    Order.delivered: 'Delivered',
+    Order.shipped:        'Order Accepted',
+    Order.outForDelivery: 'Out for Delivery',
+    Order.delivered:      'Delivered',
   };
 
   static const Map<String, String> _stepDescriptions = {
-    Order.riderAccepted: 'Head to the seller\'s location to pick up the order.',
-    Order.pickedUp: 'You have the package. Head to the delivery address.',
-    Order.inTransit: 'You are on your way to the buyer.',
-    Order.nearLocation: 'You are near the delivery location.',
-    Order.delivered: 'Package successfully delivered to the buyer.',
+    Order.shipped:        'Pick up the package from the seller\'s location.',
+    Order.outForDelivery: 'You are on your way to the buyer\'s address.',
+    Order.delivered:      'Package successfully delivered to the buyer.',
   };
 
   static const Map<String, String> _nextActionLabel = {
-    Order.riderAccepted: 'MARK AS PICKED UP',
-    Order.pickedUp: 'MARK AS IN TRANSIT',
-    Order.inTransit: 'MARK AS NEAR LOCATION',
-    Order.nearLocation: 'MARK AS DELIVERED',
+    Order.shipped:        'MARK OUT FOR DELIVERY',
+    Order.outForDelivery: 'MARK AS DELIVERED',
   };
 
   static const _stepColors = {
-    Order.riderAccepted: Color(0xFF3B82F6),
-    Order.pickedUp: Color(0xFF6366F1),
-    Order.inTransit: Color(0xFFF59E0B),
-    Order.nearLocation: Color(0xFF10B981),
-    Order.delivered: Color(0xFF10B981),
+    Order.shipped:        Color(0xFF3B82F6),
+    Order.outForDelivery: Color(0xFFF59E0B),
+    Order.delivered:      Color(0xFF10B981),
   };
 
   @override

@@ -1069,10 +1069,12 @@ class _ProfileSheetState extends State<_ProfileSheet> {
       _email      = email;
       _role       = results[1] as String;
       _riderRole  = results[2] as String;
+      const toShipStatuses   = {Order.pending, Order.confirmed, Order.preparing};
+      const toReceiveStatuses = {Order.readyForPickup, Order.shipped, Order.outForDelivery};
       _counts = {
-        'purchased':      orders.length,
-        Order.toShip:     orders.where((o) => o.status == Order.toShip).length,
-        Order.toReceive:  orders.where((o) => o.status == Order.toReceive).length,
+        'purchased':  orders.length,
+        'to_ship':    orders.where((o) => toShipStatuses.contains(o.status)).length,
+        'to_receive': orders.where((o) => toReceiveStatuses.contains(o.status)).length,
       };
     });
   }
@@ -1175,8 +1177,8 @@ class _ProfileSheetState extends State<_ProfileSheet> {
 
     final orderItems = <Map<String, dynamic>>[
       {'icon': Icons.shopping_bag_outlined,   'label': 'PURCHASED', 'count': '${_counts['purchased'] ?? 0}'},
-      {'icon': Icons.local_shipping_outlined, 'label': 'TO SHIP',   'count': '${_counts[Order.toShip] ?? 0}'},
-      {'icon': Icons.move_to_inbox_outlined,  'label': 'TO RECEIVE','count': '${_counts[Order.toReceive] ?? 0}'},
+      {'icon': Icons.local_shipping_outlined, 'label': 'TO SHIP',    'count': '${_counts['to_ship'] ?? 0}'},
+      {'icon': Icons.move_to_inbox_outlined,  'label': 'TO RECEIVE', 'count': '${_counts['to_receive'] ?? 0}'},
     ];
 
     return Padding(

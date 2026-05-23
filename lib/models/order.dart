@@ -14,36 +14,35 @@ class Order {
   String status;
   String? riderEmail;
 
-  // Original statuses
-  static const String toPay = 'toPay';
-  static const String toShip = 'toShip';
-  static const String shipped = 'shipped';
-  static const String toReceive = 'toReceive';
-  static const String completed = 'completed';
-  static const String cancelled = 'cancelled';
+  // ── Status constants ──────────────────────────────────────────────────────
+  static const String pending        = 'pending';
+  static const String confirmed      = 'confirmed';
+  static const String preparing      = 'preparing';
+  static const String readyForPickup = 'ready_for_pickup';
+  static const String shipped        = 'shipped';
+  static const String outForDelivery = 'out_for_delivery';
+  static const String delivered      = 'delivered';
+  static const String completed      = 'completed';
+  static const String cancelled      = 'cancelled';
 
-  // Rider delivery statuses
+  // Legacy — kept so old SharedPreferences data can still be parsed
+  static const String toPay        = 'toPay';
+  static const String toShip       = 'toShip';
+  static const String toReceive    = 'toReceive';
   static const String riderAccepted = 'riderAccepted';
-  static const String pickedUp = 'pickedUp';
-  static const String inTransit = 'inTransit';
+  static const String pickedUp     = 'pickedUp';
+  static const String inTransit    = 'inTransit';
   static const String nearLocation = 'nearLocation';
-  static const String delivered = 'delivered';
 
   static const double commissionRate = 0.15;
 
-  double get total => unitPrice * quantity;
+  double get total      => unitPrice * quantity;
   double get commission => total * commissionRate;
 
-  static const List<String> riderStatuses = [
-    riderAccepted,
-    pickedUp,
-    inTransit,
-    nearLocation,
-    delivered,
-  ];
+  static const List<String> riderStatuses = [shipped, outForDelivery, delivered];
 
   Order({
-    required this.id,
+    this.id = '',
     required this.sellerEmail,
     required this.buyerEmail,
     required this.productId,
@@ -57,62 +56,68 @@ class Order {
     this.riderEmail,
   });
 
+  // Parses both snake_case (Supabase) and camelCase (legacy SharedPreferences).
   factory Order.fromJson(Map<String, dynamic> json) {
     try {
-      final unitPrice = json['unitPrice'];
-      final createdAtStr = json['createdAt'] as String?;
-      
+      final unitPrice = json['unit_price'] ?? json['unitPrice'];
+      final createdAtStr =
+          json['created_at'] as String? ?? json['createdAt'] as String?;
       return Order(
-        id: json['id'] as String? ?? 'unknown',
-        sellerEmail: json['sellerEmail'] as String? ?? '',
-        buyerEmail: json['buyerEmail'] as String? ?? '',
-        productId: json['productId'] as String? ?? '',
-        productName: json['productName'] as String? ?? 'Unknown Product',
-        productImageUrl: json['productImageUrl'] as String? ?? '',
-        unitPrice: unitPrice is num ? unitPrice.toDouble() : 0.0,
-        quantity: json['quantity'] as int? ?? 1,
-        deliveryAddress: json['deliveryAddress'] as String? ?? '',
-        createdAt: createdAtStr != null 
-            ? DateTime.parse(createdAtStr) 
-            : DateTime.now(),
-        status: json['status'] as String? ?? 'unknown',
-        riderEmail: json['riderEmail'] as String?,
+        id:              json['id'] as String? ?? '',
+        sellerEmail:     json['seller_email'] as String? ?? json['sellerEmail'] as String? ?? '',
+        buyerEmail:      json['buyer_email'] as String? ?? json['buyerEmail'] as String? ?? '',
+        productId:       json['product_id'] as String? ?? json['productId'] as String? ?? '',
+        productName:     json['product_name'] as String? ?? json['productName'] as String? ?? 'Unknown Product',
+        productImageUrl: json['product_image_url'] as String? ?? json['productImageUrl'] as String? ?? '',
+        unitPrice:       unitPrice is num ? unitPrice.toDouble() : 0.0,
+        quantity:        json['quantity'] as int? ?? 1,
+        deliveryAddress: json['delivery_address'] as String? ?? json['deliveryAddress'] as String? ?? '',
+        createdAt:       createdAtStr != null ? DateTime.parse(createdAtStr) : DateTime.now(),
+        status:          json['status'] as String? ?? pending,
+        riderEmail:      json['rider_email'] as String? ?? json['riderEmail'] as String?,
       );
     } catch (e) {
-      developer.log('[Order.fromJson] Parsing error: $e');
-      developer.log('[Order.fromJson] JSON was: $json');
+      developer.log('[Order.fromJson] Parsing error: $e\nJSON: $json');
       rethrow;
     }
   }
 
-  Map<String, dynamic> toJson() => {
-        'id': id,
-        'sellerEmail': sellerEmail,
-        'buyerEmail': buyerEmail,
-        'productId': productId,
-        'productName': productName,
-        'productImageUrl': productImageUrl,
-        'unitPrice': unitPrice,
-        'quantity': quantity,
-        'deliveryAddress': deliveryAddress,
-        'createdAt': createdAt.toIso8601String(),
-        'status': status,
-        'riderEmail': riderEmail,
-      };
+  // Used for Supabase inserts — id is omitted so Supabase generates a UUID.
+  Map<String, dynamic> toSupabaseJson() {
+    final m = <String, dynamic>{
+      'buyer_email':       buyerEmail,
+      'seller_email':      sellerEmail,
+      'product_id':        productId,
+      'product_name':      productName,
+      'product_image_url': productImageUrl,
+      'unit_price':        unitPrice,
+      'quantity':          quantity,
+      'delivery_address':  deliveryAddress,
+      'status':            status,
+    };
+    if (riderEmail != null) m['rider_email'] = riderEmail;
+    return m;
+  }
 
   static String statusLabel(String status) {
     switch (status) {
-      case toPay:          return 'To Pay';
-      case toShip:         return 'To Ship';
+      case pending:        return 'Pending';
+      case confirmed:      return 'Confirmed';
+      case preparing:      return 'Preparing';
+      case readyForPickup: return 'Ready for Pickup';
       case shipped:        return 'Shipped';
-      case toReceive:      return 'To Receive';
+      case outForDelivery: return 'Out for Delivery';
+      case delivered:      return 'Delivered';
       case completed:      return 'Completed';
       case cancelled:      return 'Cancelled';
+      // Legacy
+      case toPay:          return 'To Pay';
+      case toShip:         return 'To Ship';
+      case toReceive:      return 'To Receive';
       case riderAccepted:  return 'Rider Accepted';
       case pickedUp:       return 'Picked Up';
       case inTransit:      return 'In Transit';
       case nearLocation:   return 'Near Location';
-      case delivered:      return 'Delivered';
       default:             return status;
     }
   }

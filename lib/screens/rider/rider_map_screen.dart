@@ -480,11 +480,10 @@ class _RiderMapScreenState extends State<RiderMapScreen>
   Widget _buildDeliveryPanel() {
     final order = widget.order!;
     const statusColors = {
-      Order.riderAccepted: Color(0xFF3B82F6),
-      Order.pickedUp: Color(0xFF6366F1),
-      Order.inTransit: Color(0xFFF59E0B),
-      Order.nearLocation: Color(0xFF10B981),
-      Order.delivered: Color(0xFF10B981),
+      Order.shipped:        Color(0xFF3B82F6),
+      Order.outForDelivery: Color(0xFFF59E0B),
+      Order.delivered:      Color(0xFF10B981),
+      Order.completed:      Color(0xFF10B981),
     };
     final statusColor =
         statusColors[order.status] ?? const Color(0xFF888888);

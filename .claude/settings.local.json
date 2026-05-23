@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(flutter analyze *)",
+      "Bash(git -C \"c:\\\\Users\\\\Admin\\\\OneDrive\\\\Documents\\\\GitHub\\\\E-Commerce_Mobile\" diff --stat)",
+      "Bash(git -C \"c:\\\\Users\\\\Admin\\\\OneDrive\\\\Documents\\\\GitHub\\\\E-Commerce_Mobile\" add lib/models/product.dart lib/screens/buyer_main_screen.dart lib/screens/buyer_orders_screen.dart lib/screens/buyer_profile_screen.dart lib/screens/cart_screen.dart lib/screens/checkout_screen.dart lib/screens/home_screen.dart lib/screens/login_screen.dart lib/screens/product_detail_screen.dart lib/screens/shop_screen.dart lib/services/address_service.dart lib/services/auth_service.dart lib/services/cart_service.dart)",
+      "Bash(git -C 'c:\\\\Users\\\\Admin\\\\OneDrive\\\\Documents\\\\GitHub\\\\E-Commerce_Mobile' commit -m ' *)",
+      "Bash(git -C \"c:\\\\Users\\\\Admin\\\\OneDrive\\\\Documents\\\\GitHub\\\\E-Commerce_Mobile\" push origin main)"
+    ]
+  }
+}

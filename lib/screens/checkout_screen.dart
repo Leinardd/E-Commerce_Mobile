@@ -2,13 +2,13 @@ import 'dart:convert';
 import 'dart:developer' as developer;
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/order.dart';
 import '../models/product.dart';
 import '../services/address_service.dart';
 import '../services/auth_service.dart';
 import '../services/cart_service.dart';
 import '../services/order_service.dart';
+import '../services/product_service.dart';
 
 class CheckoutScreen extends StatefulWidget {
   final List<CartItem> selectedItems;
@@ -96,27 +96,12 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     final buyerEmail = await AuthService.getUserEmail();
     if (buyerEmail == null) return;
 
-    final supabase = Supabase.instance.client;
-
     for (final item in widget.selectedItems) {
-      // Look up the seller's contact email from the sellers table using
-      // the sellerId that is already stored on the Product object.
-      String sellerEmail = '';
-      try {
-        if (item.product.sellerId != null) {
-          final row = await supabase
-              .from('sellers')
-              .select('contact_email')
-              .eq('id', item.product.sellerId)
-              .maybeSingle();
-          sellerEmail = (row?['contact_email'] as String?) ?? '';
-        }
-      } catch (e) {
-        developer.log('[CheckoutScreen] fetchSellerEmail error: $e');
-      }
+      final sellerEmail =
+          await ProductService.getSellerEmailById(item.product.sellerId) ?? '';
+      developer.log('[Checkout] sellerId=${item.product.sellerId}  sellerEmail=$sellerEmail');
 
       await OrderService.place(Order(
-        id: '${DateTime.now().millisecondsSinceEpoch}_${item.product.id}',
         sellerEmail: sellerEmail,
         buyerEmail: buyerEmail,
         productId: '${item.product.id}',
@@ -126,7 +111,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         quantity: item.quantity,
         deliveryAddress: addressStr,
         createdAt: DateTime.now(),
-        status: Order.toShip,
+        status: Order.pending,
       ));
     }
     // Cart items are intentionally kept after checkout so the buyer can
@@ -296,17 +281,30 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
           ElevatedButton(
             onPressed: () async {
               Navigator.of(dialogCtx).pop();
-              await _placeOrders();
-              nav.pop();
-              scaffold.showSnackBar(
-                const SnackBar(
-                  content: Text('Order placed successfully!'),
-                  backgroundColor: Color(0xFF0A0A0A),
-                  behavior: SnackBarBehavior.floating,
-                  margin: EdgeInsets.all(16),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.zero),
-                ),
-              );
+              try {
+                await _placeOrders();
+                nav.pop();
+                scaffold.showSnackBar(
+                  const SnackBar(
+                    content: Text('Order placed successfully!'),
+                    backgroundColor: Color(0xFF0A0A0A),
+                    behavior: SnackBarBehavior.floating,
+                    margin: EdgeInsets.all(16),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+                  ),
+                );
+              } catch (e) {
+                developer.log('[CheckoutScreen] _placeOrders error: $e');
+                scaffold.showSnackBar(
+                  SnackBar(
+                    content: Text('Failed to place order: $e'),
+                    backgroundColor: const Color(0xFFCC0000),
+                    behavior: SnackBarBehavior.floating,
+                    margin: const EdgeInsets.all(16),
+                    shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+                  ),
+                );
+              }
             },
             style: ElevatedButton.styleFrom(
               backgroundColor: const Color(0xFF0A0A0A),

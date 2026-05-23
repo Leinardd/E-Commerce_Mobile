@@ -26,7 +26,7 @@ class _RiderEarningsScreenState extends State<RiderEarningsScreen> {
     setState(() => _loading = true);
     final all = await OrderService.getByRider(widget.riderEmail);
     final delivered =
-        all.where((o) => o.status == Order.delivered).toList();
+        all.where((o) => o.status == Order.delivered || o.status == Order.completed).toList();
     final total =
         delivered.fold<double>(0.0, (sum, o) => sum + o.commission);
     if (!mounted) return;

@@ -27,6 +27,106 @@ class AuthService {
     return prefs.getString(_userEmailKey);
   }
 
+  /// Returns "First Last" — reads from Supabase Auth metadata first
+  /// (set during signup), then falls back to the users table.
+  static Future<String?> getUserDisplayName() async {
+    // Auth metadata is always available client-side with no RLS risk.
+    final meta = Supabase.instance.client.auth.currentUser?.userMetadata;
+    if (meta != null) {
+      final first = (meta['first_name'] as String?)?.trim() ?? '';
+      final last  = (meta['last_name']  as String?)?.trim() ?? '';
+      final full  = '$first $last'.trim();
+      if (full.isNotEmpty) return full;
+    }
+
+    // Fallback: query the users table.
+    final email = await getUserEmail();
+    if (email == null) return null;
+    try {
+      final row = await Supabase.instance.client
+          .from('users')
+          .select('first_name, last_name')
+          .eq('email', email)
+          .maybeSingle();
+      if (row == null) return null;
+      final first = (row['first_name'] as String?)?.trim() ?? '';
+      final last  = (row['last_name']  as String?)?.trim() ?? '';
+      final full  = '$first $last'.trim();
+      return full.isEmpty ? null : full;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static const _nameChangedAtKey = 'name_changed_at';
+
+  /// Returns the DateTime when the user can next change their name,
+  /// or null if they can change it now.
+  /// Cooldown is tracked in SharedPreferences — no SQL migration required.
+  static Future<DateTime?> getNameNextChangeDate() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_nameChangedAtKey);
+    if (raw == null) return null;
+    final last = DateTime.tryParse(raw);
+    if (last == null) return null;
+    final next = last.add(const Duration(days: 31));
+    return DateTime.now().isBefore(next) ? next : null;
+  }
+
+  /// Updates the display name.
+  /// Uses Supabase Auth updateUser (always allowed for the current user)
+  /// and attempts to sync the users table. Enforces a 31-day cooldown
+  /// tracked in SharedPreferences.
+  static Future<String?> updateDisplayName(
+      String firstName, String lastName) async {
+    if (firstName.trim().isEmpty) return 'First name cannot be empty.';
+
+    // Cooldown check
+    final nextChange = await getNameNextChangeDate();
+    if (nextChange != null) {
+      return 'You can change your name again on '
+          '${_monthName(nextChange.toLocal().month)} '
+          '${nextChange.toLocal().day}, '
+          '${nextChange.toLocal().year}.';
+    }
+
+    try {
+      // Update Supabase Auth metadata — this always works for the signed-in user.
+      await Supabase.instance.client.auth.updateUser(
+        UserAttributes(data: {
+          'first_name': firstName.trim(),
+          'last_name': lastName.trim(),
+        }),
+      );
+
+      // Best-effort sync to the users table (may be blocked by RLS, that's OK).
+      try {
+        final email = await getUserEmail();
+        if (email != null) {
+          await Supabase.instance.client.from('users').update({
+            'first_name': firstName.trim(),
+            'last_name': lastName.trim(),
+          }).eq('email', email);
+        }
+      } catch (_) {}
+
+      // Record the timestamp so the cooldown kicks in.
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+          _nameChangedAtKey, DateTime.now().toIso8601String());
+
+      return null; // success
+    } catch (e) {
+      developer.log('[AuthService] updateDisplayName error: $e');
+      return 'Unable to update name. Please try again.';
+    }
+  }
+
+  static String _monthName(int m) => const [
+        '', 'January', 'February', 'March', 'April', 'May', 'June',
+        'July', 'August', 'September', 'October', 'November', 'December'
+      ][m];
+
   static Future<int?> getUserId() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getInt(_userIdKey);

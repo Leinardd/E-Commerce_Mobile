@@ -1,140 +1,148 @@
-import 'dart:convert';
 import 'dart:developer' as developer;
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/order.dart';
 
 class OrderService {
-  static const _key = 'orders';
+  static SupabaseClient get _db => Supabase.instance.client;
 
-  static Future<List<Order>> _all() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_key);
-    if (raw == null) return [];
+  static List<Order> _parse(List rows) =>
+      rows.map((r) => Order.fromJson(r as Map<String, dynamic>)).toList();
+
+  // ── Core ──────────────────────────────────────────────────────────────────
+
+  static Future<void> place(Order order) async {
     try {
-      final list = json.decode(raw) as List;
-      final orders = <Order>[];
-      for (var item in list) {
-        try {
-          orders.add(Order.fromJson(item as Map<String, dynamic>));
-        } catch (e) {
-          developer.log('[OrderService._all] Skipping malformed order: $e');
-        }
-      }
-      return orders;
+      await _db.from('orders').insert(order.toSupabaseJson());
     } catch (e) {
-      developer.log('[OrderService._all] JSON decode error: $e');
+      developer.log('[OrderService] place error: $e');
+      rethrow;
+    }
+  }
+
+  static Future<void> updateStatus(String orderId, String newStatus) async {
+    try {
+      await _db.from('orders').update({'status': newStatus}).eq('id', orderId);
+    } catch (e) {
+      developer.log('[OrderService] updateStatus error: $e');
+      rethrow;
+    }
+  }
+
+  // ── Buyer ─────────────────────────────────────────────────────────────────
+
+  static Future<List<Order>> getByBuyer(String buyerEmail) async {
+    try {
+      final rows = await _db
+          .from('orders')
+          .select()
+          .eq('buyer_email', buyerEmail)
+          .order('created_at', ascending: false);
+      return _parse(rows as List);
+    } catch (e) {
+      developer.log('[OrderService] getByBuyer error: $e');
       return [];
     }
   }
 
-  static Future<void> _save(List<Order> orders) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-        _key, json.encode(orders.map((o) => o.toJson()).toList()));
-  }
+  // ── Seller ────────────────────────────────────────────────────────────────
 
-  static Future<void> place(Order order) async {
-    final all = await _all();
-    all.add(order);
-    await _save(all);
-  }
-
-  static Future<void> updateStatus(String orderId, String newStatus) async {
-    final all = await _all();
-    final idx = all.indexWhere((o) => o.id == orderId);
-    if (idx != -1) {
-      all[idx].status = newStatus;
-      await _save(all);
+  static Future<List<Order>> getBySeller(String sellerEmail) async {
+    try {
+      final rows = await _db
+          .from('orders')
+          .select()
+          .eq('seller_email', sellerEmail)
+          .order('created_at', ascending: false);
+      return _parse(rows as List);
+    } catch (e) {
+      developer.log('[OrderService] getBySeller error: $e');
+      return [];
     }
   }
 
-  static Future<List<Order>> getByBuyer(String buyerEmail) async {
-    final all = await _all();
-    return all.where((o) => o.buyerEmail == buyerEmail).toList()
-      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
-  }
-
-  static Future<List<Order>> getBySeller(String sellerEmail) async {
-    final all = await _all();
-    return all.where((o) => o.sellerEmail == sellerEmail).toList()
-      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
-  }
-
-  static Future<Map<String, int>> sellerStatusCounts(
-      String sellerEmail) async {
+  static Future<Map<String, int>> sellerStatusCounts(String sellerEmail) async {
     final orders = await getBySeller(sellerEmail);
+    int count(String s) => orders.where((o) => o.status == s).length;
     return {
-      Order.toPay:     orders.where((o) => o.status == Order.toPay).length,
-      Order.toShip:    orders.where((o) => o.status == Order.toShip).length,
-      Order.shipped:   orders.where((o) => o.status == Order.shipped).length,
-      Order.toReceive: orders.where((o) => o.status == Order.toReceive).length,
-      Order.completed: orders.where((o) => o.status == Order.completed).length,
+      Order.pending:        count(Order.pending),
+      Order.confirmed:      count(Order.confirmed),
+      Order.preparing:      count(Order.preparing),
+      Order.readyForPickup: count(Order.readyForPickup),
+      Order.completed:      count(Order.completed),
     };
   }
 
   static Future<double> sellerRevenue(String sellerEmail) async {
     final orders = await getBySeller(sellerEmail);
     return orders
-        .where((o) => o.status == Order.completed)
+        .where((o) => o.status == Order.completed || o.status == Order.delivered)
         .fold<double>(0.0, (sum, o) => sum + o.total);
   }
 
-  // ── Rider methods ────────────────────────────────────────────────────────
+  // ── Rider ─────────────────────────────────────────────────────────────────
 
-  /// Orders available for any rider to accept (seller has packaged them).
   static Future<List<Order>> getAvailableForRider() async {
-    final all = await _all();
-    return all
-        .where((o) => o.status == Order.toShip && o.riderEmail == null)
-        .toList()
-      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
-  }
-
-  /// Assign [riderEmail] to [orderId] and set status to riderAccepted.
-  static Future<void> acceptOrder(String orderId, String riderEmail) async {
-    final all = await _all();
-    final idx = all.indexWhere((o) => o.id == orderId);
-    if (idx != -1) {
-      all[idx].riderEmail = riderEmail;
-      all[idx].status = Order.riderAccepted;
-      await _save(all);
+    try {
+      final rows = await _db
+          .from('orders')
+          .select()
+          .eq('status', Order.readyForPickup)
+          .isFilter('rider_email', null)
+          .order('created_at', ascending: false);
+      return _parse(rows as List);
+    } catch (e) {
+      developer.log('[OrderService] getAvailableForRider error: $e');
+      return [];
     }
   }
 
-  /// All orders assigned to this rider, newest first.
+  static Future<void> acceptOrder(String orderId, String riderEmail) async {
+    await _db.from('orders').update({
+      'rider_email': riderEmail,
+      'status': Order.shipped,
+    }).eq('id', orderId);
+  }
+
   static Future<List<Order>> getByRider(String riderEmail) async {
-    final all = await _all();
-    return all.where((o) => o.riderEmail == riderEmail).toList()
-      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    try {
+      final rows = await _db
+          .from('orders')
+          .select()
+          .eq('rider_email', riderEmail)
+          .order('created_at', ascending: false);
+      return _parse(rows as List);
+    } catch (e) {
+      developer.log('[OrderService] getByRider error: $e');
+      return [];
+    }
   }
 
-  /// Active deliveries (in-progress rider statuses, excluding delivered).
-  static Future<List<Order>> getActiveDeliveriesByRider(
-      String riderEmail) async {
-    final all = await _all();
-    const active = {
-      Order.riderAccepted,
-      Order.pickedUp,
-      Order.inTransit,
-      Order.nearLocation,
-    };
-    return all
-        .where((o) => o.riderEmail == riderEmail && active.contains(o.status))
-        .toList()
-      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+  static Future<List<Order>> getActiveDeliveriesByRider(String riderEmail) async {
+    try {
+      final rows = await _db
+          .from('orders')
+          .select()
+          .eq('rider_email', riderEmail)
+          .inFilter('status', [Order.shipped, Order.outForDelivery])
+          .order('created_at', ascending: false);
+      return _parse(rows as List);
+    } catch (e) {
+      developer.log('[OrderService] getActiveDeliveriesByRider error: $e');
+      return [];
+    }
   }
 
-  /// Number of orders successfully delivered by this rider.
   static Future<int> riderCompletedCount(String riderEmail) async {
     final orders = await getByRider(riderEmail);
-    return orders.where((o) => o.status == Order.delivered).length;
+    return orders
+        .where((o) => o.status == Order.delivered || o.status == Order.completed)
+        .length;
   }
 
-  /// Total commission earned by this rider (15% of delivered order totals).
   static Future<double> riderEarnings(String riderEmail) async {
     final orders = await getByRider(riderEmail);
     return orders
-        .where((o) => o.status == Order.delivered)
+        .where((o) => o.status == Order.delivered || o.status == Order.completed)
         .fold<double>(0.0, (sum, o) => sum + o.commission);
   }
 }

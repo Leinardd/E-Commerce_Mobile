@@ -307,6 +307,38 @@ class ProductService {
     }
   }
 
+  /// Look up the contact_email for a seller by their integer seller ID.
+  /// Falls back to a direct sellers table query (allowed by anon RLS policy).
+  static Future<String?> getSellerEmailById(dynamic sellerId) async {
+    if (sellerId == null) return null;
+    final id = sellerId is num
+        ? sellerId.toInt()
+        : int.tryParse(sellerId.toString());
+    if (id == null) return null;
+
+    // Try the SECURITY DEFINER RPC first (exists if chat migration was run).
+    try {
+      final result = await _client.rpc(
+        'get_seller_email',
+        params: {'p_seller_id': id},
+      );
+      if (result != null) return result as String?;
+    } catch (_) {}
+
+    // Fallback: direct sellers table query (anon SELECT allowed for active sellers).
+    try {
+      final row = await _client
+          .from('sellers')
+          .select('contact_email')
+          .eq('id', id)
+          .maybeSingle();
+      return row?['contact_email'] as String?;
+    } catch (e) {
+      debugPrint('❌ getSellerEmailById error: $e');
+      return null;
+    }
+  }
+
   /// Returns sorted list of active category names.
   static Future<List<String>> getCategories() async {
     final map = await _categoryMap();
