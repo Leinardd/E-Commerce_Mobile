@@ -121,6 +121,29 @@ class ProductService {
     }
   }
 
+  // ── Sold counts ─────────────────────────────────────────────────────────────
+
+  static Future<Map<dynamic, int>> _soldMap(List<dynamic> productIds) async {
+    if (productIds.isEmpty) return {};
+    try {
+      final rows = await _client
+          .from('orders')
+          .select('product_id, quantity')
+          .neq('status', 'cancelled')
+          .inFilter('product_id', productIds.map((id) => id.toString()).toList());
+      final map = <dynamic, int>{};
+      for (final r in (rows as List)) {
+        final pid = r['product_id'];
+        final qty = (r['quantity'] as num?)?.toInt() ?? 0;
+        map[pid] = (map[pid] ?? 0) + qty;
+      }
+      return map;
+    } catch (e) {
+      debugPrint('❌ Error loading sold map: $e');
+      return {};
+    }
+  }
+
   // ── Enrich ──────────────────────────────────────────────────────────────────
 
   static Map<String, dynamic> _enrich(
@@ -128,6 +151,7 @@ class ProductService {
     Map<int, String> categories,
     Map<dynamic, String> images, {
     Map<int, Map<String, dynamic>> sellers = const {},
+    Map<dynamic, int> sold = const {},
   }) {
     final catId = json['category_id'];
     final catName =
@@ -141,10 +165,14 @@ class ProductService {
         : null;
     final sellerData = sellerId != null ? sellers[sellerId] : null;
 
+    final pid = json['id'];
+    final totalSold = sold[pid] ?? sold[pid?.toString()] ?? 0;
+
     return {
       ...json,
       'category': catName ?? 'Uncategorized',
-      'image_url': images[json['id']] ?? '',
+      'image_url': images[pid] ?? '',
+      'total_sold': totalSold,
       if (sellerData != null) 'sellers': sellerData,
     };
   }
@@ -165,13 +193,20 @@ class ProductService {
     final list = rows as List;
     if (list.isEmpty) return [];
 
-    final imgMap = await _imageMap(list.map((r) => r['id']).toList());
-    final selMap = await _sellerMap(list.map((r) => r['seller_id']).toList());
+    final ids = list.map((r) => r['id']).toList();
+    final results = await Future.wait([
+      _imageMap(ids),
+      _sellerMap(list.map((r) => r['seller_id']).toList()),
+      _soldMap(ids),
+    ]);
+    final imgMap  = results[0] as Map<dynamic, String>;
+    final selMap  = results[1] as Map<int, Map<String, dynamic>>;
+    final soldMap = results[2] as Map<dynamic, int>;
 
     return list
         .map((r) => Product.fromJson(
             _enrich(r as Map<String, dynamic>, catMap, imgMap,
-                sellers: selMap)))
+                sellers: selMap, sold: soldMap)))
         .toList();
   }
 
@@ -346,6 +381,57 @@ class ProductService {
     return names;
   }
 
+  /// Returns category name → product image URL.
+  /// Every category gets an image: its own product image if available,
+  /// otherwise a rotating fallback from other categories in the DB.
+  static Future<Map<String, String>> getCategoryImages() async {
+    try {
+      final catMap = await _categoryMap();
+      final rows = await _client
+          .from('products')
+          .select('id, category_id')
+          .order('created_at', ascending: false);
+
+      final list = rows as List;
+      if (list.isEmpty) return {};
+
+      final imgMap = await _imageMap(list.map((r) => r['id']).toList());
+
+      // Build a pool of all available images (in DB order)
+      final imagePool = <String>[];
+      final result = <String, String>{};
+
+      for (final r in list) {
+        final imgUrl = imgMap[r['id']];
+        if (imgUrl != null && imgUrl.isNotEmpty) imagePool.add(imgUrl);
+
+        final catId = r['category_id'];
+        if (catId == null) continue;
+        final catName = catMap[(catId as num).toInt()];
+        if (catName == null || result.containsKey(catName)) continue;
+        if (imgUrl != null && imgUrl.isNotEmpty) {
+          result[catName] = imgUrl;
+        }
+      }
+
+      // Assign a rotating fallback image to categories that have no products
+      if (imagePool.isNotEmpty) {
+        int poolIdx = 0;
+        for (final catName in catMap.values) {
+          if (!result.containsKey(catName)) {
+            result[catName] = imagePool[poolIdx % imagePool.length];
+            poolIdx++;
+          }
+        }
+      }
+
+      return result;
+    } catch (e) {
+      debugPrint('❌ getCategoryImages error: $e');
+      return {};
+    }
+  }
+
   /// Fetch a single product by ID with seller info.
   static Future<Product?> getProductById(dynamic productId) async {
     try {
@@ -363,6 +449,33 @@ class ProductService {
     } catch (e) {
       debugPrint('❌ Error fetching product: $e');
       return null;
+    }
+  }
+
+  /// Decrements a product's stock by [quantity]. Clamps at 0 — never goes negative.
+  static Future<void> decrementStock(dynamic productId, int quantity) async {
+    try {
+      final id = productId is int ? productId : int.tryParse(productId.toString());
+      if (id == null) return;
+      await _client.rpc('decrement_product_stock', params: {
+        'p_product_id': id,
+        'p_quantity': quantity,
+      });
+    } catch (e) {
+      debugPrint('❌ decrementStock error: $e');
+    }
+  }
+
+  static Future<void> incrementStock(dynamic productId, int quantity) async {
+    try {
+      final id = productId is int ? productId : int.tryParse(productId.toString());
+      if (id == null) return;
+      await _client.rpc('increment_product_stock', params: {
+        'p_product_id': id,
+        'p_quantity': quantity,
+      });
+    } catch (e) {
+      debugPrint('❌ incrementStock error: $e');
     }
   }
 

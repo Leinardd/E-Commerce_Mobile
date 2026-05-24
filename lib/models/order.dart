@@ -34,12 +34,19 @@ class Order {
   static const String inTransit    = 'inTransit';
   static const String nearLocation = 'nearLocation';
 
+  // Payment method constants
+  static const String cod    = 'cod';
+  static const String online = 'online';
+
   static const double commissionRate = 0.15;
 
   double get total      => unitPrice * quantity;
   double get commission => total * commissionRate;
 
   static const List<String> riderStatuses = [shipped, outForDelivery, delivered];
+
+  final String paymentMethod;
+  final String? cancelReason;
 
   Order({
     this.id = '',
@@ -54,6 +61,8 @@ class Order {
     required this.createdAt,
     required this.status,
     this.riderEmail,
+    this.paymentMethod = cod,
+    this.cancelReason,
   });
 
   // Parses both snake_case (Supabase) and camelCase (legacy SharedPreferences).
@@ -75,6 +84,8 @@ class Order {
         createdAt:       createdAtStr != null ? DateTime.parse(createdAtStr) : DateTime.now(),
         status:          json['status'] as String? ?? pending,
         riderEmail:      json['rider_email'] as String? ?? json['riderEmail'] as String?,
+        paymentMethod:   json['payment_method'] as String? ?? cod,
+        cancelReason:    json['cancel_reason'] as String?,
       );
     } catch (e) {
       developer.log('[Order.fromJson] Parsing error: $e\nJSON: $json');
@@ -96,6 +107,7 @@ class Order {
       'status':            status,
     };
     if (riderEmail != null) m['rider_email'] = riderEmail;
+    m['payment_method'] = paymentMethod;
     return m;
   }
 

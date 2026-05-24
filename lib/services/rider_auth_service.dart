@@ -263,6 +263,7 @@ class RiderAuthService {
     required String phoneNumber,
     required String address,
     required String driversLicense,
+    String? licenseImageUrl,
   }) async {
     try {
       final session = _db.auth.currentSession;
@@ -308,6 +309,7 @@ class RiderAuthService {
         'vehicle_type': 'motorcycle',
         'address': address.trim(),
         'status': 'pending',
+        if (licenseImageUrl != null) 'license_image_url': licenseImageUrl,
       });
 
       developer.log('Rider application submitted for: ${session.user.email}');

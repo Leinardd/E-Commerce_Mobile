@@ -1,4 +1,6 @@
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../services/seller_auth_service.dart';
 
@@ -19,8 +21,11 @@ class _SellerApplicationFormScreenState
   final _addressCtrl = TextEditingController();
   final _phoneCtrl = TextEditingController();
 
+  XFile?    _validIdFile;
+  Uint8List? _validIdBytes;
+
   bool _submitting = false;
-  bool _submitted = false;
+  bool _submitted  = false;
 
   @override
   void dispose() {
@@ -31,16 +36,68 @@ class _SellerApplicationFormScreenState
     super.dispose();
   }
 
+  Future<void> _pickId() async {
+    final file = await ImagePicker().pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 85,
+    );
+    if (file == null || !mounted) return;
+    final bytes = await file.readAsBytes();
+    setState(() {
+      _validIdFile  = file;
+      _validIdBytes = bytes;
+    });
+  }
+
+  Future<String?> _uploadValidId(String authUid) async {
+    if (_validIdBytes == null || _validIdFile == null) return null;
+    try {
+      final ext  = _validIdFile!.path.split('.').last.toLowerCase();
+      final path = '$authUid/valid_id_${DateTime.now().millisecondsSinceEpoch}.$ext';
+      await Supabase.instance.client.storage
+          .from('seller-ids')
+          .uploadBinary(
+            path,
+            _validIdBytes!,
+            fileOptions: const FileOptions(upsert: true),
+          );
+      return Supabase.instance.client.storage
+          .from('seller-ids')
+          .getPublicUrl(path);
+    } catch (e) {
+      return null;
+    }
+  }
+
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
 
+    if (_validIdFile == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please upload a valid ID to continue.'),
+          backgroundColor: Color(0xFFCC0000),
+          behavior: SnackBarBehavior.floating,
+          margin: EdgeInsets.all(16),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+        ),
+      );
+      return;
+    }
+
     setState(() => _submitting = true);
+
+    final session = Supabase.instance.client.auth.currentSession;
+    final validIdUrl = session != null
+        ? await _uploadValidId(session.user.id)
+        : null;
 
     final error = await SellerAuthService.applyAsSeller(
       storeName: _storeNameCtrl.text.trim(),
       fullName: _fullNameCtrl.text.trim(),
       address: _addressCtrl.text.trim(),
       phoneNumber: _phoneCtrl.text.trim(),
+      validIdUrl: validIdUrl,
     );
 
     if (!mounted) return;
@@ -256,6 +313,18 @@ class _SellerApplicationFormScreenState
               },
             ),
 
+            const SizedBox(height: 32),
+
+            // ── Valid ID ──────────────────────────────────────────────────
+            _sectionLabel('VALID ID'),
+            const SizedBox(height: 8),
+            const Text(
+              'Upload any government-issued ID (e.g. PhilSys, Driver\'s License, Passport)',
+              style: TextStyle(fontSize: 11, color: Color(0xFF888888), height: 1.55),
+            ),
+            const SizedBox(height: 14),
+            _idUploadBox(),
+
             const SizedBox(height: 40),
             Container(height: 1, color: const Color(0xFFEEEEEE)),
             const SizedBox(height: 28),
@@ -291,6 +360,72 @@ class _SellerApplicationFormScreenState
                         ),
                       ),
               ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _idUploadBox() {
+    if (_validIdBytes != null) {
+      return Stack(
+        children: [
+          Container(
+            width: double.infinity,
+            height: 190,
+            decoration: BoxDecoration(
+              border: Border.all(color: const Color(0xFF0A0A0A)),
+            ),
+            child: Image.memory(_validIdBytes!, fit: BoxFit.cover),
+          ),
+          Positioned(
+            top: 8,
+            right: 8,
+            child: GestureDetector(
+              onTap: () => setState(() {
+                _validIdFile  = null;
+                _validIdBytes = null;
+              }),
+              child: Container(
+                width: 28,
+                height: 28,
+                color: const Color(0xFF0A0A0A),
+                child: const Icon(Icons.close, color: Colors.white, size: 14),
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+
+    return GestureDetector(
+      onTap: _pickId,
+      child: Container(
+        width: double.infinity,
+        height: 140,
+        decoration: BoxDecoration(
+          border: Border.all(color: const Color(0xFFDDDDDD)),
+          color: const Color(0xFFFAFAFA),
+        ),
+        child: const Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.upload_file_outlined, size: 34, color: Color(0xFFAAAAAA)),
+            SizedBox(height: 10),
+            Text(
+              'TAP TO UPLOAD VALID ID',
+              style: TextStyle(
+                fontSize: 9,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 2,
+                color: Color(0xFFAAAAAA),
+              ),
+            ),
+            SizedBox(height: 6),
+            Text(
+              'JPG or PNG • max 10 MB',
+              style: TextStyle(fontSize: 10, color: Color(0xFFBBBBBB)),
             ),
           ],
         ),

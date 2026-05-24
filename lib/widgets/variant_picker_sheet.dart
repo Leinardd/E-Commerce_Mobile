@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../models/product.dart';
+import '../models/product_variant.dart';
 import 'size_guide_widget.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -27,6 +28,7 @@ class VariantPickerSheet extends StatefulWidget {
   final String? initialSize;
   final String? initialColor;
   final int initialQuantity;
+  final List<ProductVariant> variants;
   final void Function(String? size, String? color, int quantity) onAddToCart;
   final void Function(String? size, String? color, int quantity)? onBuyNow;
 
@@ -37,6 +39,7 @@ class VariantPickerSheet extends StatefulWidget {
     this.initialSize,
     this.initialColor,
     this.initialQuantity = 1,
+    this.variants = const [],
     required this.onAddToCart,
     this.onBuyNow,
   });
@@ -55,17 +58,26 @@ class VariantPickerSheet extends StatefulWidget {
   static void showSizeGuideModal(BuildContext context, String category) =>
       SizeGuide.showModal(context, category);
 
+  // Categories where color selection is not shown
+  static const _noColorCategories = {'barong'};
+
+  static bool needsColorForCategory(String category) =>
+      !_noColorCategories.contains(category.toLowerCase().trim());
+
   /// Show the variant picker bottom sheet. Size requirement is auto-detected.
   static Future<void> show(
     BuildContext context, {
     required Product product,
+    List<ProductVariant> variants = const [],
     String? initialSize,
     String? initialColor,
     int initialQuantity = 1,
     required void Function(String? size, String? color, int quantity) onAddToCart,
     void Function(String? size, String? color, int quantity)? onBuyNow,
   }) {
-    final needsSize = needsSizeForCategory(product.category);
+    final needsSize = variants.isNotEmpty
+        ? variants.any((v) => v.size != null && v.size!.isNotEmpty)
+        : needsSizeForCategory(product.category);
     return showModalBottomSheet<void>(
       context: context,
       backgroundColor: Colors.transparent,
@@ -77,6 +89,7 @@ class VariantPickerSheet extends StatefulWidget {
         child: VariantPickerSheet(
           product: product,
           needsSize: needsSize,
+          variants: variants,
           initialSize: initialSize,
           initialColor: initialColor,
           initialQuantity: initialQuantity,
@@ -97,13 +110,71 @@ class _VariantPickerSheetState extends State<VariantPickerSheet> {
   late int _qty;
   late final TextEditingController _qtyController;
 
-  static const _colors = [
+  static const _colorHexMap = <String, int>{
+    'black': 0xFF0A0A0A,   'white': 0xFFF5F5F5,   'red': 0xFFDC2626,
+    'navy': 0xFF1E2D55,    'blue': 0xFF2563EB,     'light blue': 0xFF93C5FD,
+    'sky blue': 0xFF87CEEB,'green': 0xFF16A34A,    'khaki': 0xFFB5A898,
+    'olive': 0xFF6B6B47,   'gray': 0xFF888888,     'grey': 0xFF888888,
+    'charcoal': 0xFF36454F,'brown': 0xFF92400E,    'beige': 0xFFF5F0E8,
+    'cream': 0xFFFFFDD0,   'pink': 0xFFEC4899,     'hot pink': 0xFFFF69B4,
+    'purple': 0xFF7C3AED,  'lavender': 0xFFE6E6FA, 'orange': 0xFFF97316,
+    'yellow': 0xFFEAB308,  'maroon': 0xFF800000,   'burgundy': 0xFF800020,
+    'teal': 0xFF0D9488,    'mint': 0xFF86EFAC,     'coral': 0xFFFF7F7F,
+    'gold': 0xFFD97706,    'silver': 0xFFC0C0C0,   'tan': 0xFFD2B48C,
+    'dark blue': 0xFF1E3A5F,'dark gray': 0xFF374151,'light gray': 0xFFD1D5DB,
+    'dark green': 0xFF14532D,'rose': 0xFFFF007F,   'violet': 0xFF8B00FF,
+  };
+
+  static int _hexFor(String name) =>
+      _colorHexMap[name.toLowerCase().trim()] ?? 0xFF888888;
+
+  static const _sizeOrder = ['XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL',
+      '6', '7', '8', '9', '10', '11', '12', '13'];
+
+  static const _fallbackColors = [
     ColorOption('Black', 0xFF0A0A0A),
     ColorOption('White', 0xFFF5F5F5),
     ColorOption('Navy',  0xFF1E2D55),
     ColorOption('Khaki', 0xFFB5A898),
     ColorOption('Olive', 0xFF6B6B47),
   ];
+
+  bool get _productOos => widget.product.stock == 0;
+
+  List<ColorOption> get _colorOptions {
+    final dbColors = widget.variants
+        .where((v) => v.color != null && v.color!.isNotEmpty)
+        .map((v) => v.color!)
+        .toSet()
+        .toList();
+    if (dbColors.isNotEmpty) {
+      return dbColors
+          .map((c) => ColorOption(c, _hexFor(c), outOfStock: _productOos))
+          .toList();
+    }
+    if (!VariantPickerSheet.needsColorForCategory(widget.product.category)) return [];
+    return _fallbackColors;
+  }
+
+  List<SizeOption> get _sizeOptions {
+    final dbSizes = widget.variants
+        .where((v) => v.size != null && v.size!.isNotEmpty)
+        .map((v) => v.size!)
+        .toSet()
+        .toList();
+    if (dbSizes.isNotEmpty) {
+      dbSizes.sort((a, b) {
+        final ai = _sizeOrder.indexOf(a.toUpperCase());
+        final bi = _sizeOrder.indexOf(b.toUpperCase());
+        if (ai == -1 && bi == -1) return a.compareTo(b);
+        if (ai == -1) return 1;
+        if (bi == -1) return -1;
+        return ai.compareTo(bi);
+      });
+      return dbSizes.map((s) => SizeOption(s, outOfStock: _productOos)).toList();
+    }
+    return VariantPickerSheet.sizesForCategory(widget.product.category);
+  }
 
   @override
   void initState() {
@@ -158,8 +229,10 @@ class _VariantPickerSheetState extends State<VariantPickerSheet> {
                     _buildSizeSection(),
                     const SizedBox(height: 24),
                   ],
-                  _buildColorSection(),
-                  const SizedBox(height: 24),
+                  if (_colorOptions.isNotEmpty) ...[
+                    _buildColorSection(),
+                    const SizedBox(height: 24),
+                  ],
                   _buildQuantitySection(),
                   const SizedBox(height: 16),
                 ],
@@ -236,7 +309,7 @@ class _VariantPickerSheetState extends State<VariantPickerSheet> {
   // ── Size section ─────────────────────────────────────────────────────────────
 
   Widget _buildSizeSection() {
-    final sizes = VariantPickerSheet.sizesForCategory(widget.product.category);
+    final sizes = _sizeOptions;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -386,7 +459,7 @@ class _VariantPickerSheetState extends State<VariantPickerSheet> {
         ),
         const SizedBox(height: 12),
         Row(
-          children: _colors.map((opt) {
+          children: _colorOptions.map((opt) {
             final selected = _color == opt.label;
             final disabled = opt.outOfStock;
             return Padding(

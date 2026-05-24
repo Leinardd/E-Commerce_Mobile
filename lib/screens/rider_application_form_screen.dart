@@ -1,4 +1,6 @@
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../services/rider_auth_service.dart';
 
@@ -19,8 +21,11 @@ class _RiderApplicationFormScreenState
   final _addressCtrl = TextEditingController();
   final _licenseCtrl = TextEditingController();
 
+  XFile?     _licenseFile;
+  Uint8List? _licenseBytes;
+
   bool _submitting = false;
-  bool _submitted = false;
+  bool _submitted  = false;
 
   @override
   void dispose() {
@@ -31,16 +36,68 @@ class _RiderApplicationFormScreenState
     super.dispose();
   }
 
+  Future<void> _pickLicense() async {
+    final file = await ImagePicker().pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 85,
+    );
+    if (file == null || !mounted) return;
+    final bytes = await file.readAsBytes();
+    setState(() {
+      _licenseFile  = file;
+      _licenseBytes = bytes;
+    });
+  }
+
+  Future<String?> _uploadLicense(String authUid) async {
+    if (_licenseBytes == null || _licenseFile == null) return null;
+    try {
+      final ext  = _licenseFile!.path.split('.').last.toLowerCase();
+      final path = '$authUid/license_${DateTime.now().millisecondsSinceEpoch}.$ext';
+      await Supabase.instance.client.storage
+          .from('rider-licenses')
+          .uploadBinary(
+            path,
+            _licenseBytes!,
+            fileOptions: const FileOptions(upsert: true),
+          );
+      return Supabase.instance.client.storage
+          .from('rider-licenses')
+          .getPublicUrl(path);
+    } catch (e) {
+      return null;
+    }
+  }
+
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
 
+    if (_licenseFile == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Please upload a photo of your driver's license."),
+          backgroundColor: Color(0xFFCC0000),
+          behavior: SnackBarBehavior.floating,
+          margin: EdgeInsets.all(16),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+        ),
+      );
+      return;
+    }
+
     setState(() => _submitting = true);
+
+    final session = Supabase.instance.client.auth.currentSession;
+    final licenseImageUrl = session != null
+        ? await _uploadLicense(session.user.id)
+        : null;
 
     final error = await RiderAuthService.applyAsRider(
       fullName: _fullNameCtrl.text.trim(),
       phoneNumber: _phoneCtrl.text.trim(),
       address: _addressCtrl.text.trim(),
       driversLicense: _licenseCtrl.text.trim(),
+      licenseImageUrl: licenseImageUrl,
     );
 
     if (!mounted) return;
@@ -284,6 +341,18 @@ class _RiderApplicationFormScreenState
                 return null;
               },
             ),
+            const SizedBox(height: 16),
+            const Text(
+              "DRIVER'S LICENSE PHOTO",
+              style: TextStyle(
+                fontSize: 9,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 2,
+                color: Color(0xFF555555),
+              ),
+            ),
+            const SizedBox(height: 8),
+            _licenseUploadBox(),
 
             const SizedBox(height: 40),
             Container(height: 1, color: const Color(0xFFEEEEEE)),
@@ -318,6 +387,72 @@ class _RiderApplicationFormScreenState
                         ),
                       ),
               ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _licenseUploadBox() {
+    if (_licenseBytes != null) {
+      return Stack(
+        children: [
+          Container(
+            width: double.infinity,
+            height: 190,
+            decoration: BoxDecoration(
+              border: Border.all(color: const Color(0xFF0A0A0A)),
+            ),
+            child: Image.memory(_licenseBytes!, fit: BoxFit.cover),
+          ),
+          Positioned(
+            top: 8,
+            right: 8,
+            child: GestureDetector(
+              onTap: () => setState(() {
+                _licenseFile  = null;
+                _licenseBytes = null;
+              }),
+              child: Container(
+                width: 28,
+                height: 28,
+                color: const Color(0xFF0A0A0A),
+                child: const Icon(Icons.close, color: Colors.white, size: 14),
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+
+    return GestureDetector(
+      onTap: _pickLicense,
+      child: Container(
+        width: double.infinity,
+        height: 140,
+        decoration: BoxDecoration(
+          border: Border.all(color: const Color(0xFFDDDDDD)),
+          color: const Color(0xFFFAFAFA),
+        ),
+        child: const Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.credit_card_outlined, size: 34, color: Color(0xFFAAAAAA)),
+            SizedBox(height: 10),
+            Text(
+              "TAP TO UPLOAD DRIVER'S LICENSE",
+              style: TextStyle(
+                fontSize: 9,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 2,
+                color: Color(0xFFAAAAAA),
+              ),
+            ),
+            SizedBox(height: 6),
+            Text(
+              'Front side • JPG or PNG',
+              style: TextStyle(fontSize: 10, color: Color(0xFFBBBBBB)),
             ),
           ],
         ),

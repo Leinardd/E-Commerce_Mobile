@@ -703,7 +703,7 @@ class _ShopScreenState extends State<ShopScreen> {
           crossAxisCount: isMobile ? 2 : 4,
           crossAxisSpacing: isMobile ? 8 : 16,
           mainAxisSpacing: isMobile ? 12 : 24,
-          mainAxisExtent: isMobile ? 278.0 : 340.0,
+          mainAxisExtent: isMobile ? 295.0 : 358.0,
         ),
         itemCount: products.length,
         itemBuilder: (_, i) => _ProductCard(
@@ -1126,6 +1126,18 @@ class _ProductCardState extends State<_ProductCard> {
                           fontSize: 9,
                           fontWeight: FontWeight.w600,
                           color: const Color(0xFFD97706),
+                        ),
+                      ),
+                    ],
+
+                    // Sold count
+                    if (widget.product.totalSold > 0) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        '${widget.product.totalSold} sold',
+                        style: GoogleFonts.inter(
+                          fontSize: 9,
+                          color: const Color(0xFF999999),
                         ),
                       ),
                     ],

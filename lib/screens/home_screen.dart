@@ -10,6 +10,7 @@ import '../services/rider_application_service.dart';
 import '../services/seller_application_service.dart';
 import '../widgets/variant_picker_sheet.dart';
 import 'buyer_orders_screen.dart';
+import 'product_detail_screen.dart';
 import 'rider_application_form_screen.dart';
 import 'rider/rider_dashboard_screen.dart';
 import 'seller_application_form_screen.dart';
@@ -35,31 +36,14 @@ class _HomeScreenState extends State<HomeScreen>
 
   List<String> _categories = [];
   List<Product> _featuredProducts = [];
+  Map<String, String> _catProductImages = {};
 
-  // Maps lowercased category name → Unsplash image URL
-  static const Map<String, String> _catImages = {
-    'tops': 'https://images.unsplash.com/photo-1596755094514-f87e34085b2c?w=400&h=400&fit=crop',
-    'shirts': 'https://images.unsplash.com/photo-1596755094514-f87e34085b2c?w=400&h=400&fit=crop',
-    'casual shirts': 'https://images.unsplash.com/photo-1596755094514-f87e34085b2c?w=400&h=400&fit=crop',
-    'polo shirt': 'https://images.unsplash.com/photo-1586363104862-3a5e2ab60d99?w=400&h=400&fit=crop',
-    't-shirts': 'https://images.unsplash.com/photo-1521572163474-6864f9cf17ab?w=400&h=400&fit=crop',
-    'bottoms': 'https://images.unsplash.com/photo-1594633312681-425c7b97ccd1?w=400&h=400&fit=crop',
-    'pants': 'https://images.unsplash.com/photo-1594633312681-425c7b97ccd1?w=400&h=400&fit=crop',
-    'shorts': 'https://images.unsplash.com/photo-1562157873-818bc0726f68?w=400&h=400&fit=crop',
-    'activewear & fitness tops': 'https://images.unsplash.com/photo-1571019613454-1cb2f99b2d8b?w=400&h=400&fit=crop',
-    'activewear & fitness bottoms': 'https://images.unsplash.com/photo-1571019613454-1cb2f99b2d8b?w=400&h=400&fit=crop',
-    'outerwear & jackets': 'https://images.unsplash.com/photo-1551028719-00167b16eac5?w=400&h=400&fit=crop',
-    'footwear': 'https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=400&h=400&fit=crop',
-    'accessories': 'https://images.unsplash.com/photo-1549298916-b41d501d3772?w=400&h=400&fit=crop',
-    'grooming products': 'https://images.unsplash.com/photo-1512207736890-6ffed8a84e8d?w=400&h=400&fit=crop',
-    'barong': 'https://images.unsplash.com/photo-1507679799987-c73779587ccf?w=400&h=400&fit=crop',
-    'suits & blazers': 'https://images.unsplash.com/photo-1593030761757-71fae45fa0e7?w=400&h=400&fit=crop',
-  };
-  static const _defaultCatImage =
-      'https://images.unsplash.com/photo-1445205170230-053b83016050?w=400&h=400&fit=crop';
-
-  String _catImage(String name) =>
-      _catImages[name.toLowerCase()] ?? _defaultCatImage;
+  String _catImage(String name) {
+    final img = _catProductImages[name] ?? '';
+    if (img.isNotEmpty) return img;
+    // Fallback: use any available product image so no category shows blank
+    return _catProductImages.values.firstWhere((v) => v.isNotEmpty, orElse: () => '');
+  }
 
   @override
   void initState() {
@@ -91,11 +75,13 @@ class _HomeScreenState extends State<HomeScreen>
     final results = await Future.wait([
       ProductService.getCategories(),
       ProductService.getFeatured(),
+      ProductService.getCategoryImages(),
     ]);
     if (!mounted) return;
     setState(() {
       _categories = results[0] as List<String>;
       _featuredProducts = results[1] as List<Product>;
+      _catProductImages = results[2] as Map<String, String>;
     });
   }
 
@@ -133,6 +119,40 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   void _shopNow() => Navigator.of(context).pushNamed('/shop');
+
+  Future<void> _handleAddToCart(Product p) async {
+    final email = await AuthService.getUserEmail();
+    if (!mounted) return;
+    if (email == null) {
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: Colors.white,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          title: Text('Sign in required',
+              style: GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.w600)),
+          content: Text('You need to be logged in to add items to your cart.',
+              style: GoogleFonts.inter(fontSize: 13, color: const Color(0xFF666666), height: 1.5)),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: Text('Cancel', style: GoogleFonts.inter(color: const Color(0xFF888888))),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.of(ctx).pop();
+                Navigator.of(context).pushNamed('/login');
+              },
+              child: Text('Sign In',
+                  style: GoogleFonts.inter(fontWeight: FontWeight.w600, color: const Color(0xFF0A0A0A))),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+    _showVariantPicker(p);
+  }
 
   void _showVariantPicker(Product p) {
     VariantPickerSheet.show(
@@ -528,9 +548,9 @@ class _HomeScreenState extends State<HomeScreen>
                   imageUrl: p.imageUrl,
                   isMobile: isMobile,
                   onTap: () => Navigator.of(context).push(MaterialPageRoute(
-                    builder: (_) => const ShopScreen(),
+                    builder: (_) => ProductDetailScreen(product: p),
                   )),
-                  onAddToCart: () => _showVariantPicker(p),
+                  onAddToCart: () => _handleAddToCart(p),
                 );
               },
             );
@@ -773,36 +793,33 @@ class _CategoryCardState extends State<_CategoryCard> {
                   SizedBox(
                     width: double.infinity,
                     height: imgH,
-                    child: Image.network(
-                      widget.imageUrl,
-                      fit: BoxFit.cover,
-                      loadingBuilder: (_, child, progress) {
-                        if (progress == null) return child;
-                        return SizedBox(
-                          height: imgH,
-                          child: const Center(
-                            child: CircularProgressIndicator(
-                              strokeWidth: 1,
-                              color: Color(0xFF0A0A0A),
-                            ),
-                          ),
-                        );
-                      },
-                      errorBuilder: (_, __, ___) => SizedBox(
-                        height: imgH,
-                        child: const Center(
-                          child: Icon(Icons.image_outlined,
-                              size: 28, color: Color(0xFFCCCCCC)),
-                        ),
-                      ),
-                    ),
+                    child: widget.imageUrl.isNotEmpty
+                        ? Image.network(
+                            widget.imageUrl,
+                            fit: BoxFit.cover,
+                            loadingBuilder: (_, child, progress) {
+                              if (progress == null) return child;
+                              return Container(
+                                height: imgH,
+                                color: const Color(0xFFF0F0F0),
+                                child: const Center(
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 1,
+                                    color: Color(0xFF0A0A0A),
+                                  ),
+                                ),
+                              );
+                            },
+                            errorBuilder: (_, __, ___) => _noImagePlaceholder(imgH),
+                          )
+                        : _noImagePlaceholder(imgH),
                   ),
                   AnimatedContainer(
                     duration: const Duration(milliseconds: 200),
                     height: imgH,
                     width: double.infinity,
                     color: _hovered
-                        ? const Color(0xFF0A0A0A).withValues(alpha:0.18)
+                        ? const Color(0xFF0A0A0A).withValues(alpha: 0.18)
                         : Colors.transparent,
                   ),
                 ],
@@ -845,6 +862,26 @@ class _CategoryCardState extends State<_CategoryCard> {
                 ),
               ),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _noImagePlaceholder(double height) {
+    return Container(
+      height: height,
+      width: double.infinity,
+      color: const Color(0xFF1A1A1A),
+      child: Center(
+        child: Text(
+          widget.category.toUpperCase(),
+          textAlign: TextAlign.center,
+          style: const TextStyle(
+            fontSize: 9,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 2,
+            color: Color(0xFF555555),
           ),
         ),
       ),

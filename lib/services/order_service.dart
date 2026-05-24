@@ -19,11 +19,28 @@ class OrderService {
     }
   }
 
-  static Future<void> updateStatus(String orderId, String newStatus) async {
+  static Future<void> updateStatus(
+    String orderId,
+    String newStatus, {
+    String? cancelReason,
+  }) async {
+    final payload = <String, dynamic>{'status': newStatus};
+    if (cancelReason != null) payload['cancel_reason'] = cancelReason;
+
     try {
-      await _db.from('orders').update({'status': newStatus}).eq('id', orderId);
+      await _db.from('orders').update(payload).eq('id', orderId);
     } catch (e) {
       developer.log('[OrderService] updateStatus error: $e');
+      // If cancel_reason column doesn't exist yet, retry with status only
+      if (cancelReason != null) {
+        try {
+          await _db.from('orders').update({'status': newStatus}).eq('id', orderId);
+          return;
+        } catch (e2) {
+          developer.log('[OrderService] updateStatus fallback error: $e2');
+          rethrow;
+        }
+      }
       rethrow;
     }
   }

@@ -2,12 +2,14 @@ import 'dart:convert';
 import 'dart:developer' as developer;
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:url_launcher/url_launcher.dart';
 import '../models/order.dart';
 import '../models/product.dart';
 import '../services/address_service.dart';
 import '../services/auth_service.dart';
 import '../services/cart_service.dart';
 import '../services/order_service.dart';
+import '../services/paymongo_service.dart';
 import '../services/product_service.dart';
 
 class CheckoutScreen extends StatefulWidget {
@@ -21,19 +23,29 @@ class CheckoutScreen extends StatefulWidget {
 class _CheckoutScreenState extends State<CheckoutScreen> {
   late CartService cartService;
 
-  // Address loaded from SharedPreferences (signup address)
   Map<String, String>? _savedAddress;
-
-  // Address that will be used for this order
   Map<String, String>? _deliveryAddress;
-
   bool _loadingAddress = true;
+  String _paymentMethod = Order.cod;
+  bool _placingOrder = false;
+
+  final _nameCtrl  = TextEditingController();
+  final _emailCtrl = TextEditingController();
+  final _phoneCtrl = TextEditingController();
 
   @override
   void initState() {
     super.initState();
     cartService = CartService();
     _loadSavedAddress();
+  }
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _emailCtrl.dispose();
+    _phoneCtrl.dispose();
+    super.dispose();
   }
 
   Future<void> _loadSavedAddress() async {
@@ -112,10 +124,103 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         deliveryAddress: addressStr,
         createdAt: DateTime.now(),
         status: Order.pending,
+        paymentMethod: _paymentMethod,
       ));
+
+      await ProductService.decrementStock(item.product.id, item.quantity);
+      cartService.updateProductStock(item.product.id, item.quantity);
     }
     // Cart items are intentionally kept after checkout so the buyer can
     // re-order the same items without adding them again.
+  }
+
+  Future<void> _handleOnlinePayment() async {
+    final name  = _nameCtrl.text.trim();
+    final email = _emailCtrl.text.trim();
+    final phone = _phoneCtrl.text.trim();
+
+    if (name.isEmpty || email.isEmpty || phone.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please fill in all customer information fields.'),
+          backgroundColor: Color(0xFFCC0000),
+          behavior: SnackBarBehavior.floating,
+          margin: EdgeInsets.all(16),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+        ),
+      );
+      return;
+    }
+
+    final nav      = Navigator.of(context);
+    final scaffold = ScaffoldMessenger.of(context);
+
+    setState(() => _placingOrder = true);
+    try {
+      final lineItems = widget.selectedItems.map((item) => {
+        'amount': (item.product.price * 100).round(),
+        'currency': 'PHP',
+        'name': item.product.name,
+        'description': item.product.name,
+        'quantity': item.quantity,
+      }).toList();
+
+      final session = await PayMongoService.createCheckoutSession(
+        name: name,
+        email: email,
+        phone: phone,
+        lineItems: lineItems,
+      );
+
+      final sessionId    = session['id']!;
+      final checkoutUrl  = session['checkout_url']!;
+
+      if (!await launchUrl(
+        Uri.parse(checkoutUrl),
+        mode: LaunchMode.externalApplication,
+      )) {
+        throw 'Could not open payment page. Please try again.';
+      }
+
+      if (!mounted) return;
+      setState(() => _placingOrder = false);
+
+      final paid = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => _PaymentConfirmDialog(sessionId: sessionId),
+      );
+
+      if (paid == true && mounted) {
+        setState(() => _placingOrder = true);
+        await _placeOrders();
+        nav.pop();
+        scaffold.showSnackBar(
+          const SnackBar(
+            content: Text('Order placed successfully!'),
+            backgroundColor: Color(0xFF0A0A0A),
+            behavior: SnackBarBehavior.floating,
+            margin: EdgeInsets.all(16),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+          ),
+        );
+      }
+    } catch (e) {
+      developer.log('[CheckoutScreen] online payment error: $e');
+      if (mounted) {
+        scaffold.showSnackBar(
+          SnackBar(
+            content: Text(e.toString()),
+            backgroundColor: const Color(0xFFCC0000),
+            behavior: SnackBarBehavior.floating,
+            margin: const EdgeInsets.all(16),
+            shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _placingOrder = false);
+    }
   }
 
   void _showOrderConfirmation() {
@@ -240,6 +345,41 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                 ],
               ),
               const SizedBox(height: 20),
+              Container(height: 1, color: const Color(0xFFEEEEEE)),
+              const SizedBox(height: 16),
+              const Text(
+                'PAYMENT METHOD',
+                style: TextStyle(
+                  fontSize: 8,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 2,
+                  color: Color(0xFF888888),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Icon(
+                    _paymentMethod == Order.cod
+                        ? Icons.payments_outlined
+                        : Icons.phone_android_outlined,
+                    size: 14,
+                    color: const Color(0xFF0A0A0A),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    _paymentMethod == Order.cod
+                        ? 'Cash on Delivery'
+                        : 'Online Payment',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                      color: Color(0xFF0A0A0A),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
               Container(height: 1, color: const Color(0xFFEEEEEE)),
               const SizedBox(height: 16),
               const Text(
@@ -529,14 +669,37 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
 
                     const SizedBox(height: 40),
 
+                    // ── Payment Method ───────────────────────────────
+                    _sectionHeader('PAYMENT METHOD'),
+                    const SizedBox(height: 16),
+                    _paymentOption(
+                      value: Order.cod,
+                      icon: Icons.payments_outlined,
+                      title: 'Cash on Delivery',
+                      subtitle: 'Pay in cash when your order arrives',
+                    ),
+                    const SizedBox(height: 10),
+                    _paymentOption(
+                      value: Order.online,
+                      icon: Icons.phone_android_outlined,
+                      title: 'Online Payment',
+                      subtitle: 'GCash · Credit/Debit Card · Maya',
+                      onTap: _openOnlinePaymentSheet,
+                    ),
+
+                    const SizedBox(height: 40),
+
                     // ── Place Order ──────────────────────────────────
                     if (!_loadingAddress)
                       SizedBox(
                         width: double.infinity,
                         height: 50,
                         child: ElevatedButton(
-                          onPressed:
-                              _isAddressSet ? _showOrderConfirmation : null,
+                          onPressed: (_isAddressSet && !_placingOrder)
+                              ? (_paymentMethod == Order.online
+                                  ? _handleOnlinePayment
+                                  : _showOrderConfirmation)
+                              : null,
                           style: ElevatedButton.styleFrom(
                             backgroundColor: const Color(0xFF0A0A0A),
                             foregroundColor: Colors.white,
@@ -546,16 +709,25 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                               borderRadius: BorderRadius.zero,
                             ),
                           ),
-                          child: Text(
-                            _isAddressSet
-                                ? 'PLACE ORDER'
-                                : 'ADD ADDRESS TO CONTINUE',
-                            style: const TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: 2.5,
-                            ),
-                          ),
+                          child: _placingOrder
+                              ? const SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : Text(
+                                  _isAddressSet
+                                      ? 'PLACE ORDER'
+                                      : 'ADD ADDRESS TO CONTINUE',
+                                  style: const TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w700,
+                                    letterSpacing: 2.5,
+                                  ),
+                                ),
                         ),
                       ),
 
@@ -676,6 +848,408 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         const SizedBox(height: 10),
         Container(width: 28, height: 1, color: const Color(0xFF0A0A0A)),
       ],
+    );
+  }
+
+  Future<void> _openOnlinePaymentSheet() async {
+    final confirmed = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+      builder: (_) => _OnlineInfoSheet(
+        nameCtrl:  _nameCtrl,
+        emailCtrl: _emailCtrl,
+        phoneCtrl: _phoneCtrl,
+      ),
+    );
+    if (confirmed == true && mounted) {
+      setState(() => _paymentMethod = Order.online);
+    }
+  }
+
+  Widget _paymentOption({
+    required String value,
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    VoidCallback? onTap,
+  }) {
+    final selected = _paymentMethod == value;
+    return GestureDetector(
+      onTap: onTap ?? () => setState(() => _paymentMethod = value),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        width: double.infinity,
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: selected ? const Color(0xFF0A0A0A) : Colors.white,
+          border: Border.all(
+            color: selected ? const Color(0xFF0A0A0A) : const Color(0xFFDDDDDD),
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              icon,
+              size: 20,
+              color: selected ? Colors.white : const Color(0xFF555555),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: selected ? Colors.white : const Color(0xFF0A0A0A),
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: selected
+                          ? Colors.white.withValues(alpha: 0.65)
+                          : const Color(0xFF999999),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (selected)
+              const Icon(Icons.check_circle, size: 18, color: Colors.white)
+            else
+              Container(
+                width: 18,
+                height: 18,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(color: const Color(0xFFCCCCCC)),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Payment confirmation dialog — shown after browser checkout completes
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _PaymentConfirmDialog extends StatefulWidget {
+  final String sessionId;
+  const _PaymentConfirmDialog({required this.sessionId});
+
+  @override
+  State<_PaymentConfirmDialog> createState() => _PaymentConfirmDialogState();
+}
+
+class _PaymentConfirmDialogState extends State<_PaymentConfirmDialog> {
+  bool _checking = false;
+  String? _error;
+
+  Future<void> _verify() async {
+    setState(() { _checking = true; _error = null; });
+    try {
+      final status = await PayMongoService.getSessionPaymentStatus(widget.sessionId);
+      if (!mounted) return;
+      if (status == 'succeeded') {
+        Navigator.of(context).pop(true);
+      } else if (status == 'expired') {
+        setState(() {
+          _checking = false;
+          _error = 'Payment session expired. Please start again.';
+        });
+      } else {
+        setState(() {
+          _checking = false;
+          _error = 'Payment not yet received. Please complete the payment and try again.';
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() { _checking = false; _error = e.toString(); });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+      contentPadding: EdgeInsets.zero,
+      content: SizedBox(
+        width: 340,
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'CONFIRM PAYMENT',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 2,
+                  color: Color(0xFF0A0A0A),
+                ),
+              ),
+              Container(
+                width: 28,
+                height: 1,
+                color: const Color(0xFF0A0A0A),
+                margin: const EdgeInsets.only(top: 10, bottom: 20),
+              ),
+              const Text(
+                'Complete your payment in the browser, then tap "I\'VE PAID" to confirm your order.',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: Color(0xFF555555),
+                  height: 1.5,
+                ),
+              ),
+              if (_error != null) ...[
+                const SizedBox(height: 14),
+                Text(
+                  _error!,
+                  style: const TextStyle(fontSize: 11, color: Color(0xFFCC0000)),
+                ),
+              ],
+              const SizedBox(height: 24),
+              SizedBox(
+                width: double.infinity,
+                height: 46,
+                child: ElevatedButton(
+                  onPressed: _checking ? null : _verify,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF0A0A0A),
+                    foregroundColor: Colors.white,
+                    elevation: 0,
+                    disabledBackgroundColor: const Color(0xFF555555),
+                    shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+                  ),
+                  child: _checking
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                        )
+                      : const Text(
+                          "I'VE PAID",
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 2,
+                          ),
+                        ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: TextButton(
+                  onPressed: _checking ? null : () => Navigator.of(context).pop(false),
+                  child: const Text(
+                    'CANCEL',
+                    style: TextStyle(fontSize: 9, letterSpacing: 1.5, color: Color(0xFF888888)),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Online payment info sheet
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _OnlineInfoSheet extends StatefulWidget {
+  final TextEditingController nameCtrl;
+  final TextEditingController emailCtrl;
+  final TextEditingController phoneCtrl;
+
+  const _OnlineInfoSheet({
+    required this.nameCtrl,
+    required this.emailCtrl,
+    required this.phoneCtrl,
+  });
+
+  @override
+  State<_OnlineInfoSheet> createState() => _OnlineInfoSheetState();
+}
+
+class _OnlineInfoSheetState extends State<_OnlineInfoSheet> {
+  String? _error;
+
+  void _confirm() {
+    final name  = widget.nameCtrl.text.trim();
+    final email = widget.emailCtrl.text.trim();
+    final phone = widget.phoneCtrl.text.trim();
+    if (name.isEmpty || email.isEmpty || phone.isEmpty) {
+      setState(() => _error = 'Please fill in all fields.');
+      return;
+    }
+    Navigator.of(context).pop(true);
+  }
+
+  Widget _field({
+    required TextEditingController ctrl,
+    required String label,
+    required String hint,
+    TextInputType? type,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 9,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 1,
+            color: Color(0xFF555555),
+          ),
+        ),
+        const SizedBox(height: 6),
+        TextField(
+          controller: ctrl,
+          keyboardType: type,
+          onChanged: (_) => setState(() => _error = null),
+          style: const TextStyle(fontSize: 13, color: Color(0xFF0A0A0A)),
+          decoration: InputDecoration(
+            hintText: hint,
+            hintStyle: const TextStyle(fontSize: 13, color: Color(0xFFBBBBBB)),
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            border: const OutlineInputBorder(
+              borderRadius: BorderRadius.zero,
+              borderSide: BorderSide(color: Color(0xFFDDDDDD)),
+            ),
+            enabledBorder: const OutlineInputBorder(
+              borderRadius: BorderRadius.zero,
+              borderSide: BorderSide(color: Color(0xFFDDDDDD)),
+            ),
+            focusedBorder: const OutlineInputBorder(
+              borderRadius: BorderRadius.zero,
+              borderSide: BorderSide(color: Color(0xFF0A0A0A)),
+            ),
+            filled: true,
+            fillColor: Colors.white,
+          ),
+        ),
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(
+        left: 24,
+        right: 24,
+        top: 32,
+        bottom: MediaQuery.of(context).viewInsets.bottom + 32,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'ONLINE PAYMENT',
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 3,
+              color: Color(0xFF0A0A0A),
+            ),
+          ),
+          Container(
+            width: 28,
+            height: 1,
+            color: const Color(0xFF0A0A0A),
+            margin: const EdgeInsets.only(top: 10, bottom: 24),
+          ),
+          const Text(
+            'Enter your details to proceed with payment.',
+            style: TextStyle(fontSize: 12, color: Color(0xFF555555), height: 1.5),
+          ),
+          const SizedBox(height: 24),
+          _field(
+            ctrl:  widget.nameCtrl,
+            label: 'FULL NAME',
+            hint:  'Enter your full name',
+          ),
+          const SizedBox(height: 16),
+          _field(
+            ctrl:  widget.emailCtrl,
+            label: 'EMAIL ADDRESS',
+            hint:  'Enter your email',
+            type:  TextInputType.emailAddress,
+          ),
+          const SizedBox(height: 16),
+          _field(
+            ctrl:  widget.phoneCtrl,
+            label: 'PHONE NUMBER',
+            hint:  '+63 XXX XXX XXXX',
+            type:  TextInputType.phone,
+          ),
+          if (_error != null) ...[
+            const SizedBox(height: 12),
+            Text(
+              _error!,
+              style: const TextStyle(fontSize: 11, color: Color(0xFFCC0000)),
+            ),
+          ],
+          const SizedBox(height: 24),
+          SizedBox(
+            width: double.infinity,
+            height: 50,
+            child: ElevatedButton(
+              onPressed: _confirm,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF0A0A0A),
+                foregroundColor: Colors.white,
+                elevation: 0,
+                shape: const RoundedRectangleBorder(
+                    borderRadius: BorderRadius.zero),
+              ),
+              child: const Text(
+                'CONFIRM',
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 2.5,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          SizedBox(
+            width: double.infinity,
+            child: TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text(
+                'CANCEL',
+                style: TextStyle(
+                  fontSize: 9,
+                  letterSpacing: 1.5,
+                  color: Color(0xFF888888),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

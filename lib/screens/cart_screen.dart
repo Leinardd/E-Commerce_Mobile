@@ -4,6 +4,8 @@ import 'package:google_fonts/google_fonts.dart';
 import '../models/product.dart';
 import '../services/cart_service.dart';
 import 'checkout_screen.dart';
+import 'product_detail_screen.dart';
+import 'seller_store_screen.dart';
 
 class CartScreen extends StatefulWidget {
   const CartScreen({super.key});
@@ -219,11 +221,16 @@ class _CartScreenState extends State<CartScreen> {
                       final sid = item.product.sellerId?.toString() ?? '';
                       grouped.putIfAbsent(sid, () => []).add(item);
                     }
-                    // Flat list: String = seller header, CartItem = product row
+                    // Flat list: _SellerInfo = seller header, CartItem = product row
                     final entries = <Object>[];
                     for (final group in grouped.values) {
-                      final name = group.first.product.sellerName;
-                      entries.add(name.isNotEmpty ? name : 'Unknown Seller');
+                      final p = group.first.product;
+                      final name = p.sellerName.isNotEmpty ? p.sellerName : 'Unknown Seller';
+                      entries.add(_SellerInfo(
+                        name: name,
+                        sellerId: p.sellerId,
+                        sellerLogoUrl: p.sellerLogoUrl,
+                      ));
                       entries.addAll(group);
                     }
 
@@ -235,14 +242,14 @@ class _CartScreenState extends State<CartScreen> {
                       itemCount: entries.length,
                       itemBuilder: (context, index) {
                         final entry = entries[index];
-                        if (entry is String) {
+                        if (entry is _SellerInfo) {
                           return _SellerHeader(
-                              name: entry, isFirst: index == 0);
+                              info: entry, isFirst: index == 0);
                         }
                         final item = entry as CartItem;
                         final isLast = index == entries.length - 1;
                         final nextIsHeader =
-                            !isLast && entries[index + 1] is String;
+                            !isLast && entries[index + 1] is _SellerInfo;
                         return Column(
                           children: [
                             _CartItemRow(
@@ -560,16 +567,24 @@ class _CartItemRowState extends State<_CartItemRow> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Expanded(
-                        child: Text(
-                          widget.item.product.name,
-                          style: GoogleFonts.inter(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            color: const Color(0xFF0A0A0A),
-                            height: 1.3,
+                        child: GestureDetector(
+                          onTap: () => Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => ProductDetailScreen(
+                                  product: widget.item.product),
+                            ),
                           ),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
+                          child: Text(
+                            widget.item.product.name,
+                            style: GoogleFonts.inter(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: const Color(0xFF0A0A0A),
+                              height: 1.3,
+                            ),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
                       ),
                       const SizedBox(width: 8),
@@ -796,34 +811,57 @@ class _ImgPlaceholder extends StatelessWidget {
       );
 }
 
-class _SellerHeader extends StatelessWidget {
+class _SellerInfo {
   final String name;
+  final dynamic sellerId;
+  final String sellerLogoUrl;
+  const _SellerInfo({required this.name, this.sellerId, this.sellerLogoUrl = ''});
+}
+
+class _SellerHeader extends StatelessWidget {
+  final _SellerInfo info;
   final bool isFirst;
 
-  const _SellerHeader({required this.name, this.isFirst = false});
+  const _SellerHeader({required this.info, this.isFirst = false});
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.only(bottom: 14, top: isFirst ? 0 : 4),
-      child: Row(
-        children: [
-          const Icon(Icons.storefront_outlined,
-              size: 13, color: Color(0xFF555555)),
-          const SizedBox(width: 6),
-          Expanded(
-            child: Text(
-              name.toUpperCase(),
-              style: GoogleFonts.commissioner(
-                fontSize: 9,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 2,
-                color: const Color(0xFF555555),
-              ),
-              overflow: TextOverflow.ellipsis,
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => Navigator.of(context).push(MaterialPageRoute(
+            builder: (_) => SellerStoreScreen(
+              sellerId: info.sellerId,
+              sellerName: info.name,
+              sellerLogoUrl: info.sellerLogoUrl,
             ),
+          )),
+      child: Padding(
+        padding: EdgeInsets.only(bottom: 14, top: isFirst ? 0 : 4),
+        child: SizedBox(
+          height: 36,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              const Icon(Icons.storefront_outlined,
+                  size: 13, color: Color(0xFF555555)),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  info.name.toUpperCase(),
+                  style: GoogleFonts.commissioner(
+                    fontSize: 9,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 2,
+                    color: const Color(0xFF555555),
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              const Icon(Icons.chevron_right,
+                  size: 14, color: Color(0xFF999999)),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }

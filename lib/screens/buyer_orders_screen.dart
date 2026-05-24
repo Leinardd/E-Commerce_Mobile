@@ -1,7 +1,12 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/order.dart';
 import '../services/auth_service.dart';
+import '../services/cart_service.dart';
 import '../services/order_service.dart';
+import '../services/product_service.dart';
 
 class BuyerOrdersScreen extends StatefulWidget {
   const BuyerOrdersScreen({super.key});
@@ -14,6 +19,7 @@ class _BuyerOrdersScreenState extends State<BuyerOrdersScreen> {
   String _filter = 'all';
   List<Order> _orders = [];
   bool _loading = true;
+  Set<String> _reviewedOrders = {};
 
   // Tab key → matching statuses
   static const _tabStatuses = <String, List<String>>{
@@ -38,6 +44,7 @@ class _BuyerOrdersScreenState extends State<BuyerOrdersScreen> {
   void initState() {
     super.initState();
     _load();
+    _loadReviewedOrders();
   }
 
   Future<void> _load() async {
@@ -53,6 +60,55 @@ class _BuyerOrdersScreenState extends State<BuyerOrdersScreen> {
       _orders = orders;
       _loading = false;
     });
+  }
+
+  Future<void> _loadReviewedOrders() async {
+    final prefs = await SharedPreferences.getInstance();
+    final ids = prefs.getStringList('reviewed_orders') ?? [];
+    if (mounted) setState(() => _reviewedOrders = ids.toSet());
+  }
+
+  Future<void> _submitReview(Order order, int rating, String text) async {
+    final prefs = await SharedPreferences.getInstance();
+    final email = await AuthService.getUserEmail();
+    final displayName = await AuthService.getUserDisplayName();
+    final author = displayName?.isNotEmpty == true
+        ? displayName!
+        : (email?.split('@').first ?? 'Anonymous');
+
+    final key = 'reviews_${order.productId}';
+    final existing = prefs.getString(key);
+    final reviews = existing != null
+        ? (jsonDecode(existing) as List).cast<Map<String, dynamic>>()
+        : <Map<String, dynamic>>[];
+    reviews.insert(0, {
+      'author': author,
+      'rating': rating,
+      'text': text,
+      'date': DateTime.now().toIso8601String(),
+    });
+    await prefs.setString(key, jsonEncode(reviews));
+
+    final reviewed = prefs.getStringList('reviewed_orders') ?? [];
+    if (!reviewed.contains(order.id)) reviewed.add(order.id);
+    await prefs.setStringList('reviewed_orders', reviewed);
+
+    if (mounted) setState(() => _reviewedOrders = reviewed.toSet());
+  }
+
+  void _openReviewSheet(Order order) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+      builder: (_) => _ReviewSheet(
+        productName: order.productName,
+        onSubmit: (rating, text) async {
+          await _submitReview(order, rating, text);
+        },
+      ),
+    );
   }
 
   List<Order> get _filtered {
@@ -77,60 +133,45 @@ class _BuyerOrdersScreenState extends State<BuyerOrdersScreen> {
   }
 
   Future<void> _cancelOrder(Order order) async {
-    final confirm = await showDialog<bool>(
+    final reason = await showModalBottomSheet<String>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
-        title: const Text(
-          'CANCEL ORDER',
-          style: TextStyle(
-            fontSize: 11,
-            fontWeight: FontWeight.w700,
-            letterSpacing: 2.5,
-            color: Color(0xFF0A0A0A),
-          ),
-        ),
-        content: const Text(
-          'Are you sure you want to cancel this order?',
-          style: TextStyle(fontSize: 13, color: Color(0xFF555555)),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text(
-              'KEEP ORDER',
-              style: TextStyle(fontSize: 9, letterSpacing: 1.5, color: Color(0xFF888888)),
-            ),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF0A0A0A),
-              foregroundColor: Colors.white,
-              elevation: 0,
-              shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
-            ),
-            child: const Text(
-              'YES, CANCEL',
-              style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700, letterSpacing: 1.5),
-            ),
-          ),
-        ],
-      ),
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+      builder: (_) => const _CancelReasonSheet(),
     );
-    if (confirm != true) return;
-    await OrderService.updateStatus(order.id, Order.cancelled);
-    _load();
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Order cancelled.'),
-        backgroundColor: Color(0xFF0A0A0A),
-        behavior: SnackBarBehavior.floating,
-        margin: EdgeInsets.all(16),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.zero),
-      ),
-    );
+    if (reason == null) return;
+    try {
+      await OrderService.updateStatus(
+        order.id,
+        Order.cancelled,
+        cancelReason: reason,
+      );
+      await ProductService.incrementStock(order.productId, order.quantity);
+      CartService().restoreProductStock(order.productId, order.quantity);
+      await _load();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Order cancelled.'),
+          backgroundColor: Color(0xFF0A0A0A),
+          behavior: SnackBarBehavior.floating,
+          margin: EdgeInsets.all(16),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to cancel order: $e'),
+          backgroundColor: const Color(0xFFCC0000),
+          behavior: SnackBarBehavior.floating,
+          margin: const EdgeInsets.all(16),
+          shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+        ),
+      );
+    }
   }
 
   @override
@@ -315,7 +356,7 @@ class _BuyerOrdersScreenState extends State<BuyerOrdersScreen> {
 
           // Progress bar
           const SizedBox(height: 16),
-          _progressBar(order.status),
+          _progressBar(order.status, cancelReason: order.cancelReason),
 
           // Cancel — only while pending (before seller confirms)
           if (order.status == Order.pending) ...[
@@ -386,32 +427,89 @@ class _BuyerOrdersScreenState extends State<BuyerOrdersScreen> {
                 ],
               ),
             ),
+            const SizedBox(height: 10),
+            if (_reviewedOrders.contains(order.id))
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                decoration: BoxDecoration(
+                  border: Border.all(color: const Color(0xFFEEEEEE)),
+                ),
+                child: const Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.check, size: 12, color: Color(0xFF888888)),
+                    SizedBox(width: 6),
+                    Text(
+                      'REVIEW SUBMITTED',
+                      style: TextStyle(
+                        fontSize: 9,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 1.5,
+                        color: Color(0xFF888888),
+                      ),
+                    ),
+                  ],
+                ),
+              )
+            else
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton(
+                  onPressed: () => _openReviewSheet(order),
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: Color(0xFF0A0A0A)),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+                  ),
+                  child: const Text(
+                    'WRITE A REVIEW',
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 2,
+                      color: Color(0xFF0A0A0A),
+                    ),
+                  ),
+                ),
+              ),
           ],
         ],
       ),
     );
   }
 
-  Widget _progressBar(String status) {
+  Widget _progressBar(String status, {String? cancelReason}) {
     if (status == Order.cancelled) {
       return Container(
         width: double.infinity,
-        padding: const EdgeInsets.symmetric(vertical: 10),
+        padding: const EdgeInsets.all(12),
         color: const Color(0xFFFFEEEE),
-        child: const Row(
-          mainAxisAlignment: MainAxisAlignment.center,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(Icons.cancel_outlined, size: 13, color: Color(0xFFCC0000)),
-            SizedBox(width: 6),
-            Text(
-              'ORDER CANCELLED',
-              style: TextStyle(
-                fontSize: 8,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 1.5,
-                color: Color(0xFFCC0000),
-              ),
+            const Row(
+              children: [
+                Icon(Icons.cancel_outlined, size: 13, color: Color(0xFFCC0000)),
+                SizedBox(width: 6),
+                Text(
+                  'ORDER CANCELLED',
+                  style: TextStyle(
+                    fontSize: 8,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 1.5,
+                    color: Color(0xFFCC0000),
+                  ),
+                ),
+              ],
             ),
+            if (cancelReason != null && cancelReason.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Text(
+                'Reason: $cancelReason',
+                style: const TextStyle(fontSize: 11, color: Color(0xFFCC0000)),
+              ),
+            ],
           ],
         ),
       );
@@ -556,6 +654,349 @@ class _BuyerOrdersScreenState extends State<BuyerOrdersScreen> {
           ),
         ),
       ],
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Cancel reason bottom sheet
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _CancelReasonSheet extends StatefulWidget {
+  const _CancelReasonSheet();
+
+  @override
+  State<_CancelReasonSheet> createState() => _CancelReasonSheetState();
+}
+
+class _CancelReasonSheetState extends State<_CancelReasonSheet> {
+  static const _presets = [
+    'I changed my mind',
+    'Found a better price elsewhere',
+    'Ordered by mistake',
+    'Delivery time is too long',
+    'Payment issue',
+    'Others',
+  ];
+
+  String? _selected;
+  final _otherCtrl = TextEditingController();
+
+  @override
+  void dispose() {
+    _otherCtrl.dispose();
+    super.dispose();
+  }
+
+  bool get _canConfirm {
+    if (_selected == null) return false;
+    if (_selected == 'Others') return _otherCtrl.text.trim().isNotEmpty;
+    return true;
+  }
+
+  void _confirm() {
+    if (!_canConfirm) return;
+    final reason = _selected == 'Others' ? _otherCtrl.text.trim() : _selected!;
+    Navigator.of(context).pop(reason);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      padding: EdgeInsets.only(
+        left: 24,
+        right: 24,
+        top: 32,
+        bottom: MediaQuery.of(context).viewInsets.bottom + 32,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'CANCEL ORDER',
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 3,
+              color: Color(0xFF0A0A0A),
+            ),
+          ),
+          Container(
+            width: 28,
+            height: 1,
+            color: const Color(0xFF0A0A0A),
+            margin: const EdgeInsets.only(top: 10, bottom: 20),
+          ),
+          const Text(
+            'WHY ARE YOU CANCELLING?',
+            style: TextStyle(
+              fontSize: 8,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 2,
+              color: Color(0xFF888888),
+            ),
+          ),
+          const SizedBox(height: 14),
+          ..._presets.map((reason) {
+            final selected = _selected == reason;
+            return GestureDetector(
+              onTap: () => setState(() => _selected = reason),
+              child: Container(
+                width: double.infinity,
+                margin: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+                decoration: BoxDecoration(
+                  color: selected ? const Color(0xFF0A0A0A) : Colors.white,
+                  border: Border.all(
+                    color: selected ? const Color(0xFF0A0A0A) : const Color(0xFFDDDDDD),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        reason,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: selected ? Colors.white : const Color(0xFF0A0A0A),
+                        ),
+                      ),
+                    ),
+                    if (selected)
+                      const Icon(Icons.check, size: 14, color: Colors.white),
+                  ],
+                ),
+              ),
+            );
+          }),
+          if (_selected == 'Others') ...[
+            const SizedBox(height: 4),
+            TextField(
+              controller: _otherCtrl,
+              onChanged: (_) => setState(() {}),
+              maxLines: 3,
+              style: const TextStyle(fontSize: 13, color: Color(0xFF0A0A0A)),
+              decoration: const InputDecoration(
+                hintText: 'Please describe your reason...',
+                hintStyle: TextStyle(fontSize: 12, color: Color(0xFFBBBBBB)),
+                contentPadding: EdgeInsets.all(14),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.zero,
+                  borderSide: BorderSide(color: Color(0xFFDDDDDD)),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.zero,
+                  borderSide: BorderSide(color: Color(0xFFDDDDDD)),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.zero,
+                  borderSide: BorderSide(color: Color(0xFF0A0A0A)),
+                ),
+                filled: true,
+                fillColor: Colors.white,
+              ),
+            ),
+          ],
+          const SizedBox(height: 20),
+          SizedBox(
+            width: double.infinity,
+            height: 50,
+            child: ElevatedButton(
+              onPressed: _canConfirm ? _confirm : null,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFCC0000),
+                foregroundColor: Colors.white,
+                elevation: 0,
+                disabledBackgroundColor: const Color(0xFFEEEEEE),
+                disabledForegroundColor: const Color(0xFFAAAAAA),
+                shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+              ),
+              child: const Text(
+                'CONFIRM CANCELLATION',
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 2,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          SizedBox(
+            width: double.infinity,
+            child: TextButton(
+              onPressed: () => Navigator.of(context).pop(null),
+              child: const Text(
+                'KEEP ORDER',
+                style: TextStyle(fontSize: 9, letterSpacing: 1.5, color: Color(0xFF888888)),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Write a review bottom sheet
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _ReviewSheet extends StatefulWidget {
+  final String productName;
+  final Future<void> Function(int rating, String text) onSubmit;
+
+  const _ReviewSheet({required this.productName, required this.onSubmit});
+
+  @override
+  State<_ReviewSheet> createState() => _ReviewSheetState();
+}
+
+class _ReviewSheetState extends State<_ReviewSheet> {
+  int _rating = 0;
+  final _ctrl = TextEditingController();
+  bool _submitting = false;
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (_rating == 0 || _ctrl.text.trim().isEmpty) return;
+    setState(() => _submitting = true);
+    await widget.onSubmit(_rating, _ctrl.text.trim());
+    if (mounted) Navigator.of(context).pop();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      padding: EdgeInsets.only(
+        left: 24,
+        right: 24,
+        top: 32,
+        bottom: MediaQuery.of(context).viewInsets.bottom + 32,
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'WRITE A REVIEW',
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 3,
+              color: Color(0xFF0A0A0A),
+            ),
+          ),
+          Container(
+            width: 28,
+            height: 1,
+            color: const Color(0xFF0A0A0A),
+            margin: const EdgeInsets.only(top: 10, bottom: 6),
+          ),
+          Text(
+            widget.productName,
+            style: GoogleFonts.playfairDisplay(
+              fontSize: 16,
+              color: const Color(0xFF0A0A0A),
+            ),
+          ),
+          const SizedBox(height: 20),
+          const Text(
+            'YOUR RATING',
+            style: TextStyle(
+              fontSize: 8,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 2,
+              color: Color(0xFF888888),
+            ),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: List.generate(5, (i) {
+              return GestureDetector(
+                onTap: () => setState(() => _rating = i + 1),
+                child: Padding(
+                  padding: const EdgeInsets.only(right: 6),
+                  child: Icon(
+                    i < _rating ? Icons.star : Icons.star_border,
+                    size: 32,
+                    color: const Color(0xFF0A0A0A),
+                  ),
+                ),
+              );
+            }),
+          ),
+          const SizedBox(height: 20),
+          const Text(
+            'YOUR REVIEW',
+            style: TextStyle(
+              fontSize: 8,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 2,
+              color: Color(0xFF888888),
+            ),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _ctrl,
+            maxLines: 4,
+            onChanged: (_) => setState(() {}),
+            style: const TextStyle(fontSize: 13, color: Color(0xFF0A0A0A)),
+            decoration: const InputDecoration(
+              hintText: 'Share your experience with this product...',
+              hintStyle: TextStyle(fontSize: 13, color: Color(0xFFBBBBBB)),
+              contentPadding: EdgeInsets.all(14),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.zero,
+                borderSide: BorderSide(color: Color(0xFFDDDDDD)),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.zero,
+                borderSide: BorderSide(color: Color(0xFF0A0A0A)),
+              ),
+            ),
+          ),
+          const SizedBox(height: 20),
+          SizedBox(
+            width: double.infinity,
+            height: 50,
+            child: ElevatedButton(
+              onPressed: (_rating > 0 && _ctrl.text.trim().isNotEmpty && !_submitting)
+                  ? _submit
+                  : null,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF0A0A0A),
+                foregroundColor: Colors.white,
+                elevation: 0,
+                disabledBackgroundColor: const Color(0xFFEEEEEE),
+                disabledForegroundColor: const Color(0xFFAAAAAA),
+                shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+              ),
+              child: _submitting
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 1.5, color: Colors.white),
+                    )
+                  : const Text(
+                      'SUBMIT REVIEW',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 2,
+                      ),
+                    ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

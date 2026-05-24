@@ -333,6 +333,7 @@ class SellerAuthService {
     required String fullName,
     required String address,
     required String phoneNumber,
+    String? validIdUrl,
   }) async {
     try {
       final session = _db.auth.currentSession;
@@ -442,6 +443,7 @@ class SellerAuthService {
         'status': 'pending',
         'commission_rate': 10.00,
         'island_group': 'Luzon',
+        if (validIdUrl != null) 'valid_id_url': validIdUrl,
       });
 
       developer.log('Seller application submitted for: ${session.user.email}');

@@ -4,12 +4,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import '../models/order.dart';
 import '../models/product.dart';
+import '../models/product_variant.dart';
 import '../services/auth_service.dart';
 import '../services/cart_service.dart';
-import '../services/order_service.dart';
 import '../services/product_service.dart';
+import '../services/seller_product_service.dart';
 import '../widgets/variant_picker_sheet.dart';
 import 'chat_conversation_screen.dart';
 import 'checkout_screen.dart';
@@ -32,31 +32,95 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
   late final TextEditingController _quantityController;
 
   // Review state
-  bool _hasPurchased = false;
   List<Map<String, dynamic>> _reviews = [];
 
   // Seller state — fetched lazily so the card always shows
   Map<String, dynamic>? _sellerProfile;
 
-  static const _colors = [
-    {'label': 'Black',  'hex': 0xFF0A0A0A},
-    {'label': 'White',  'hex': 0xFFF5F5F5},
-    {'label': 'Navy',   'hex': 0xFF1E2D55},
-    {'label': 'Khaki',  'hex': 0xFFB5A898},
-    {'label': 'Olive',  'hex': 0xFF6B6B47},
-  ];
+  // Variants loaded from DB
+  List<ProductVariant> _variants = [];
 
-  bool get _needsSize =>
-      VariantPickerSheet.needsSizeForCategory(widget.product.category);
+  // Color name → ARGB hex for swatch rendering
+  static const _colorHexMap = <String, int>{
+    'black': 0xFF0A0A0A,   'white': 0xFFF5F5F5,   'red': 0xFFDC2626,
+    'navy': 0xFF1E2D55,    'blue': 0xFF2563EB,     'light blue': 0xFF93C5FD,
+    'sky blue': 0xFF87CEEB,'green': 0xFF16A34A,    'khaki': 0xFFB5A898,
+    'olive': 0xFF6B6B47,   'gray': 0xFF888888,     'grey': 0xFF888888,
+    'charcoal': 0xFF36454F,'brown': 0xFF92400E,    'beige': 0xFFF5F0E8,
+    'cream': 0xFFFFFDD0,   'pink': 0xFFEC4899,     'hot pink': 0xFFFF69B4,
+    'purple': 0xFF7C3AED,  'lavender': 0xFFE6E6FA, 'orange': 0xFFF97316,
+    'yellow': 0xFFEAB308,  'maroon': 0xFF800000,   'burgundy': 0xFF800020,
+    'teal': 0xFF0D9488,    'mint': 0xFF86EFAC,     'coral': 0xFFFF7F7F,
+    'gold': 0xFFD97706,    'silver': 0xFFC0C0C0,   'tan': 0xFFD2B48C,
+    'dark blue': 0xFF1E3A5F,'dark gray': 0xFF374151,'light gray': 0xFFD1D5DB,
+    'dark green': 0xFF14532D,'rose': 0xFFFF007F,   'violet': 0xFF8B00FF,
+  };
+
+  static int _hexFor(String name) =>
+      _colorHexMap[name.toLowerCase().trim()] ?? 0xFF888888;
+
+  static const _sizeOrder = ['XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL',
+      '6', '7', '8', '9', '10', '11', '12', '13'];
+
+  // Whether the whole product is out of stock
+  bool get _productOos => widget.product.stock == 0;
+
+  // Unique colors from DB variants
+  List<({String label, bool outOfStock})> get _colorOptions {
+    final dbColors = _variants
+        .where((v) => v.color != null && v.color!.isNotEmpty)
+        .map((v) => v.color!)
+        .toSet()
+        .toList();
+    if (dbColors.isNotEmpty) {
+      // Only mark a colour OOS when the whole product has no stock
+      return dbColors.map((c) => (label: c, outOfStock: _productOos)).toList();
+    }
+    // Fallback: category-based static colours
+    if (!VariantPickerSheet.needsColorForCategory(widget.product.category)) return [];
+    return [
+      (label: 'Black', outOfStock: _productOos),
+      (label: 'White', outOfStock: _productOos),
+      (label: 'Navy',  outOfStock: _productOos),
+      (label: 'Khaki', outOfStock: _productOos),
+      (label: 'Olive', outOfStock: _productOos),
+    ];
+  }
+
+  // Unique sizes from DB variants, sorted by standard order
+  List<({String label, bool outOfStock})> get _sizeOptions {
+    final dbSizes = _variants
+        .where((v) => v.size != null && v.size!.isNotEmpty)
+        .map((v) => v.size!)
+        .toSet()
+        .toList();
+    if (dbSizes.isNotEmpty) {
+      dbSizes.sort((a, b) {
+        final ai = _sizeOrder.indexOf(a.toUpperCase());
+        final bi = _sizeOrder.indexOf(b.toUpperCase());
+        if (ai == -1 && bi == -1) return a.compareTo(b);
+        if (ai == -1) return 1;
+        if (bi == -1) return -1;
+        return ai.compareTo(bi);
+      });
+      // Only mark a size OOS when the whole product has no stock
+      return dbSizes.map((s) => (label: s, outOfStock: _productOos)).toList();
+    }
+    // Fallback: category-based static sizes
+    return VariantPickerSheet.sizesForCategory(widget.product.category)
+        .map((o) => (label: o.label, outOfStock: o.outOfStock))
+        .toList();
+  }
+
 
   @override
   void initState() {
     super.initState();
     cartService = CartService();
     _quantityController = TextEditingController(text: '$quantity');
-    _checkPurchase();
     _loadReviews();
     _loadSellerProfile();
+    _loadVariants();
   }
 
   @override
@@ -65,24 +129,33 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
     super.dispose();
   }
 
-  Future<void> _checkPurchase() async {
-    final email = await AuthService.getUserEmail();
-    if (email == null || !mounted) return;
-    final orders = await OrderService.getByBuyer(email);
-    final productIdStr = '${widget.product.id}';
-    final purchased = orders.any(
-      (o) => o.productId == productIdStr && o.status == Order.completed,
-    );
-    if (mounted) setState(() => _hasPurchased = purchased);
-  }
-
   static String _reviewKey(dynamic id) => 'reviews_$id';
 
   Future<void> _loadReviews() async {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString(_reviewKey(widget.product.id));
     if (raw == null || !mounted) return;
-    final list = (jsonDecode(raw) as List).cast<Map<String, dynamic>>();
+    var list = (jsonDecode(raw) as List).cast<Map<String, dynamic>>();
+
+    // Migrate stored email-prefix authors to full display names
+    final email = await AuthService.getUserEmail();
+    final displayName = await AuthService.getUserDisplayName();
+    if (email != null && displayName != null && displayName.isNotEmpty) {
+      final emailPrefix = email.split('@').first;
+      bool changed = false;
+      list = list.map((r) {
+        if (r['author'] == emailPrefix) {
+          changed = true;
+          return {...r, 'author': displayName};
+        }
+        return r;
+      }).toList();
+      if (changed) {
+        await prefs.setString(_reviewKey(widget.product.id), jsonEncode(list));
+      }
+    }
+
+    if (!mounted) return;
     setState(() => _reviews = list);
   }
 
@@ -127,18 +200,10 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
     }
   }
 
-  Future<void> _saveReview(int rating, String text) async {
-    final email = await AuthService.getUserEmail() ?? 'Anonymous';
-    final review = {
-      'author': email.split('@').first,
-      'rating': rating,
-      'text': text,
-      'date': DateTime.now().toIso8601String(),
-    };
-    final updated = [review, ..._reviews];
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_reviewKey(widget.product.id), jsonEncode(updated));
-    if (mounted) setState(() => _reviews = updated);
+  Future<void> _loadVariants() async {
+    final variants =
+        await SellerProductService.getVariants(widget.product.id);
+    if (mounted) setState(() => _variants = variants);
   }
 
   void _setDetailQty(int value) {
@@ -150,10 +215,55 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
       ..selection = TextSelection.fromPosition(TextPosition(offset: '$v'.length));
   }
 
-  void _addToCart() {
+  void _promptLogin() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        title: Text('Sign in required',
+            style: GoogleFonts.inter(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: const Color(0xFF0A0A0A))),
+        content: Text(
+            'You need to be logged in to add items to your cart.',
+            style: GoogleFonts.inter(
+                fontSize: 13, color: const Color(0xFF666666), height: 1.5)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: Text('Cancel',
+                style: GoogleFonts.inter(
+                    fontSize: 13, color: const Color(0xFF888888))),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              Navigator.of(context).pushNamed('/login');
+            },
+            child: Text('Sign In',
+                style: GoogleFonts.inter(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: const Color(0xFF0A0A0A))),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _addToCart() async {
+    final email = await AuthService.getUserEmail();
+    if (!mounted) return;
+    if (email == null) {
+      _promptLogin();
+      return;
+    }
     VariantPickerSheet.show(
       context,
       product: widget.product,
+      variants: _variants,
       initialSize: _selectedSize,
       initialColor: _selectedColor,
       initialQuantity: quantity,
@@ -189,10 +299,17 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
     );
   }
 
-  void _buyNow() {
+  Future<void> _buyNow() async {
+    final email = await AuthService.getUserEmail();
+    if (!mounted) return;
+    if (email == null) {
+      _promptLogin();
+      return;
+    }
     VariantPickerSheet.show(
       context,
       product: widget.product,
+      variants: _variants,
       initialSize: _selectedSize,
       initialColor: _selectedColor,
       initialQuantity: quantity,
@@ -362,64 +479,60 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                   ),
                   const SizedBox(height: 32),
 
-                  // ── Color selection ───────────────────────────────────────
-                  _SectionLabel(label: 'COLOR', trailing: _selectedColor),
-                  const SizedBox(height: 14),
-                  Row(
-                    children: _colors.map((c) {
-                      final label = c['label'] as String;
-                      final hex   = c['hex'] as int;
-                      final selected = _selectedColor == label;
-                      return Padding(
-                        padding: const EdgeInsets.only(right: 12),
-                        child: GestureDetector(
-                          onTap: () => setState(() => _selectedColor = label),
-                          child: Column(
-                            children: [
-                              AnimatedContainer(
-                                duration: const Duration(milliseconds: 150),
-                                width: 32,
-                                height: 32,
-                                decoration: BoxDecoration(
-                                  color: Color(hex),
-                                  shape: BoxShape.circle,
-                                  border: Border.all(
-                                    color: selected
+                  // ── Color selection (from DB variants) ───────────────────
+                  if (_colorOptions.isNotEmpty) ...[
+                    _SectionLabel(label: 'COLOR', trailing: _selectedColor),
+                    const SizedBox(height: 14),
+                    Wrap(
+                      spacing: 12,
+                      runSpacing: 10,
+                      children: _colorOptions.map((opt) {
+                        final hex = _hexFor(opt.label);
+                        final selected = _selectedColor == opt.label;
+                        return GestureDetector(
+                          onTap: opt.outOfStock
+                              ? null
+                              : () => setState(() => _selectedColor = opt.label),
+                          child: AnimatedContainer(
+                            duration: const Duration(milliseconds: 150),
+                            width: 32,
+                            height: 32,
+                            decoration: BoxDecoration(
+                              color: Color(hex),
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: opt.outOfStock
+                                    ? const Color(0xFFEEEEEE)
+                                    : selected
                                         ? const Color(0xFF0A0A0A)
                                         : const Color(0xFFDDDDDD),
-                                    width: selected ? 2.5 : 1,
-                                  ),
-                                  boxShadow: selected
-                                      ? [
-                                          BoxShadow(
-                                            color: const Color(0xFF0A0A0A)
-                                                .withValues(alpha: 0.15),
-                                            blurRadius: 6,
-                                            offset: const Offset(0, 2),
-                                          )
-                                        ]
-                                      : null,
-                                ),
-                                child: selected
-                                    ? Icon(
-                                        Icons.check,
-                                        size: 14,
-                                        color: hex == 0xFFF5F5F5
-                                            ? const Color(0xFF0A0A0A)
-                                            : Colors.white,
-                                      )
-                                    : null,
+                                width: selected ? 2.5 : 1,
                               ),
-                            ],
+                              boxShadow: selected && !opt.outOfStock
+                                  ? [BoxShadow(
+                                      color: const Color(0xFF0A0A0A).withValues(alpha: 0.15),
+                                      blurRadius: 6,
+                                      offset: const Offset(0, 2),
+                                    )]
+                                  : null,
+                            ),
+                            child: opt.outOfStock
+                                ? const Icon(Icons.close, size: 12, color: Color(0xFFCCCCCC))
+                                : selected
+                                    ? Icon(Icons.check, size: 14,
+                                        color: hex == 0xFFF5F5F5 || hex == 0xFFFFFDD0 || hex == 0xFFF5F0E8
+                                            ? const Color(0xFF0A0A0A)
+                                            : Colors.white)
+                                    : null,
                           ),
-                        ),
-                      );
-                    }).toList(),
-                  ),
-                  const SizedBox(height: 28),
+                        );
+                      }).toList(),
+                    ),
+                    const SizedBox(height: 28),
+                  ],
 
-                  // ── Size selection (clothing/footwear only) ───────────────
-                  if (_needsSize) ...[
+                  // ── Size selection (from DB variants) ────────────────────
+                  if (_sizeOptions.isNotEmpty) ...[
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
@@ -443,18 +556,18 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                     Wrap(
                       spacing: 8,
                       runSpacing: 8,
-                      children: VariantPickerSheet.sizesForCategory(widget.product.category).map((opt) {
+                      children: _sizeOptions.map((opt) {
                         final selected = _selectedSize == opt.label;
                         return GestureDetector(
-                          onTap: opt.outOfStock ? null : () => setState(() => _selectedSize = opt.label),
+                          onTap: opt.outOfStock
+                              ? null
+                              : () => setState(() => _selectedSize = opt.label),
                           child: AnimatedContainer(
                             duration: const Duration(milliseconds: 150),
                             width: 48,
                             height: 48,
                             decoration: BoxDecoration(
-                              color: selected
-                                  ? const Color(0xFF0A0A0A)
-                                  : Colors.white,
+                              color: selected ? const Color(0xFF0A0A0A) : Colors.white,
                               border: Border.all(
                                 color: opt.outOfStock
                                     ? const Color(0xFFEEEEEE)
@@ -640,6 +753,9 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                   Container(width: 28, height: 1, color: const Color(0xFF0A0A0A)),
                   const SizedBox(height: 24),
 
+                  // Rating summary
+                  if (_reviews.isNotEmpty) _RatingSummary(reviews: _reviews),
+
                   // User-submitted reviews (newest first)
                   ..._reviews.map(
                     (r) => _ReviewCard(
@@ -651,22 +767,38 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                   ),
 
                   if (_reviews.isEmpty)
-                    const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 16),
-                      child: Text(
-                        'No reviews yet. Be the first to review this product.',
-                        style: TextStyle(fontSize: 12, color: Color(0xFF999999)),
-                        textAlign: TextAlign.center,
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 32),
+                      child: Center(
+                        child: Column(
+                          children: [
+                            const Icon(
+                              Icons.chat_bubble_outline_rounded,
+                              size: 64,
+                              color: Color(0xFFDDDDDD),
+                            ),
+                            const SizedBox(height: 16),
+                            Text(
+                              'No reviews yet',
+                              style: GoogleFonts.playfairDisplay(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w400,
+                                color: const Color(0xFF0A0A0A),
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              'Be the first to review this product!',
+                              style: GoogleFonts.inter(
+                                fontSize: 13,
+                                color: const Color(0xFF999999),
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
 
-                  const SizedBox(height: 8),
-
-                  // ── Write a review (purchase-gated) ────────────────────────
-                  _WriteReviewSection(
-                    hasPurchased: _hasPurchased,
-                    onSubmit: _saveReview,
-                  ),
                   const SizedBox(height: 32),
                 ],
               ),
@@ -848,6 +980,125 @@ class _DetailRowState extends State<_DetailRow> {
             ],
           ],
         ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Rating summary — average score + star breakdown
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _RatingSummary extends StatelessWidget {
+  final List<Map<String, dynamic>> reviews;
+  const _RatingSummary({required this.reviews});
+
+  @override
+  Widget build(BuildContext context) {
+    final count = reviews.length;
+    final avg = reviews.fold<double>(
+          0,
+          (sum, r) => sum + ((r['rating'] as num?)?.toDouble() ?? 0),
+        ) /
+        count;
+
+    // Count per star level (5 down to 1)
+    final counts = List.generate(5, (i) {
+      final star = 5 - i;
+      return reviews.where((r) => (r['rating'] as int? ?? 0) == star).length;
+    });
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 24),
+      padding: const EdgeInsets.all(18),
+      color: const Color(0xFFF7F6F4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          // Left: big number + stars + count
+          Column(
+            children: [
+              Text(
+                avg.toStringAsFixed(1),
+                style: GoogleFonts.playfairDisplay(
+                  fontSize: 44,
+                  fontWeight: FontWeight.w400,
+                  color: const Color(0xFF0A0A0A),
+                  height: 1,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Row(
+                children: List.generate(5, (i) {
+                  if (avg >= i + 1) {
+                    return const Icon(Icons.star, size: 13, color: Color(0xFF0A0A0A));
+                  } else if (avg > i) {
+                    return const Icon(Icons.star_half, size: 13, color: Color(0xFF0A0A0A));
+                  }
+                  return const Icon(Icons.star_border, size: 13, color: Color(0xFF0A0A0A));
+                }),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                '$count ${count == 1 ? 'review' : 'reviews'}',
+                style: GoogleFonts.inter(
+                  fontSize: 10,
+                  color: const Color(0xFF888888),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(width: 20),
+          // Right: bar breakdown
+          Expanded(
+            child: Column(
+              children: List.generate(5, (i) {
+                final star = 5 - i;
+                final barFill = count > 0 ? counts[i] / count : 0.0;
+                return Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 2),
+                  child: Row(
+                    children: [
+                      Text(
+                        '$star',
+                        style: GoogleFonts.inter(
+                          fontSize: 10,
+                          color: const Color(0xFF555555),
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      const Icon(Icons.star, size: 9, color: Color(0xFF0A0A0A)),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(2),
+                          child: LinearProgressIndicator(
+                            value: barFill,
+                            minHeight: 5,
+                            backgroundColor: const Color(0xFFE0E0E0),
+                            valueColor: const AlwaysStoppedAnimation(Color(0xFF0A0A0A)),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      SizedBox(
+                        width: 16,
+                        child: Text(
+                          '${counts[i]}',
+                          style: GoogleFonts.inter(
+                            fontSize: 10,
+                            color: const Color(0xFF888888),
+                          ),
+                          textAlign: TextAlign.right,
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1128,6 +1379,20 @@ class _ProductImageGallery extends StatefulWidget {
 class _ProductImageGalleryState extends State<_ProductImageGallery> {
   int _activeIndex = 0;
 
+  void _openViewer(BuildContext context, List<String> images, int startIndex) {
+    Navigator.of(context).push(PageRouteBuilder(
+      opaque: false,
+      barrierDismissible: true,
+      barrierColor: Colors.black,
+      pageBuilder: (_, __, ___) => _FullScreenViewer(
+        images: images,
+        initialIndex: startIndex,
+      ),
+      transitionsBuilder: (_, anim, __, child) =>
+          FadeTransition(opacity: anim, child: child),
+    ));
+  }
+
   @override
   Widget build(BuildContext context) {
     // Simulate multiple angles from the same image
@@ -1137,13 +1402,19 @@ class _ProductImageGalleryState extends State<_ProductImageGallery> {
 
     return Column(
       children: [
-        // Main image
+        // Main image — tap to open full-screen viewer
         Stack(
           children: [
-            SizedBox(
-              width: double.infinity,
-              height: mainH,
-              child: _NetImage(url: images[_activeIndex], fit: BoxFit.cover),
+            GestureDetector(
+              onTap: () => _openViewer(context, images, _activeIndex),
+              child: SizedBox(
+                width: double.infinity,
+                height: mainH,
+                child: Hero(
+                  tag: 'product_image_$_activeIndex',
+                  child: _NetImage(url: images[_activeIndex], fit: BoxFit.cover),
+                ),
+              ),
             ),
             // Subtle gradient overlay at bottom
             Positioned(
@@ -1254,194 +1525,119 @@ class _NetImage extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Purchase-gated write-a-review section
+// Full-screen image viewer with pinch-to-zoom and swipe between images
 // ─────────────────────────────────────────────────────────────────────────────
 
-class _WriteReviewSection extends StatefulWidget {
-  final bool hasPurchased;
-  final Future<void> Function(int rating, String text) onSubmit;
+class _FullScreenViewer extends StatefulWidget {
+  final List<String> images;
+  final int initialIndex;
 
-  const _WriteReviewSection({
-    required this.hasPurchased,
-    required this.onSubmit,
-  });
+  const _FullScreenViewer({required this.images, required this.initialIndex});
 
   @override
-  State<_WriteReviewSection> createState() => _WriteReviewSectionState();
+  State<_FullScreenViewer> createState() => _FullScreenViewerState();
 }
 
-class _WriteReviewSectionState extends State<_WriteReviewSection> {
-  int _rating = 0;
-  final _ctrl = TextEditingController();
-  bool _submitting = false;
-  bool _submitted = false;
+class _FullScreenViewerState extends State<_FullScreenViewer> {
+  late final PageController _pageCtrl;
+  late int _current;
+
+  @override
+  void initState() {
+    super.initState();
+    _current = widget.initialIndex;
+    _pageCtrl = PageController(initialPage: widget.initialIndex);
+  }
 
   @override
   void dispose() {
-    _ctrl.dispose();
+    _pageCtrl.dispose();
     super.dispose();
-  }
-
-  Future<void> _submit() async {
-    if (_rating == 0 || _ctrl.text.trim().isEmpty) return;
-    setState(() => _submitting = true);
-    await widget.onSubmit(_rating, _ctrl.text.trim());
-    if (mounted) {
-      setState(() {
-        _submitting = false;
-        _submitted = true;
-      });
-    }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Container(height: 1, color: const Color(0xFFEEEEEE)),
-        const SizedBox(height: 24),
-        Text(
-          'WRITE A REVIEW',
-          style: GoogleFonts.commissioner(
-            fontSize: 10,
-            fontWeight: FontWeight.w700,
-            color: const Color(0xFF0A0A0A),
-            letterSpacing: 4,
-          ),
-        ),
-        const SizedBox(height: 14),
-        Container(width: 28, height: 1, color: const Color(0xFF0A0A0A)),
-        const SizedBox(height: 24),
-
-        if (_submitted)
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(16),
-            color: const Color(0xFFF6F6F6),
-            child: Row(
-              children: [
-                const Icon(Icons.check_circle_outline,
-                    size: 16, color: Color(0xFF0A0A0A)),
-                const SizedBox(width: 10),
-                Text(
-                  'Thank you for your review!',
-                  style: GoogleFonts.inter(
-                      fontSize: 13, color: const Color(0xFF0A0A0A)),
-                ),
-              ],
-            ),
-          )
-        else if (!widget.hasPurchased)
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: const Color(0xFFF6F6F6),
-              border: Border.all(color: const Color(0xFFEEEEEE)),
-            ),
-            child: Row(
-              children: [
-                const Icon(Icons.lock_outline,
-                    size: 16, color: Color(0xFFAAAAAA)),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    'Only verified buyers can leave a review. Purchase this product to share your experience.',
-                    style: GoogleFonts.inter(
-                      fontSize: 12,
-                      color: const Color(0xFF888888),
-                      height: 1.5,
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Stack(
+        children: [
+          // Swipeable pages with pinch-zoom
+          PageView.builder(
+            controller: _pageCtrl,
+            itemCount: widget.images.length,
+            onPageChanged: (i) => setState(() => _current = i),
+            itemBuilder: (_, i) {
+              return InteractiveViewer(
+                minScale: 0.8,
+                maxScale: 4.0,
+                child: Center(
+                  child: Hero(
+                    tag: 'product_image_$i',
+                    child: Image.network(
+                      widget.images[i],
+                      fit: BoxFit.contain,
+                      loadingBuilder: (_, child, progress) {
+                        if (progress == null) return child;
+                        return const Center(
+                          child: CircularProgressIndicator(
+                            color: Colors.white54,
+                            strokeWidth: 1.5,
+                          ),
+                        );
+                      },
+                      errorBuilder: (_, __, ___) => const Icon(
+                        Icons.broken_image_outlined,
+                        size: 48,
+                        color: Colors.white24,
+                      ),
                     ),
-                  ),
-                ),
-              ],
-            ),
-          )
-        else ...[
-          // Star picker
-          Row(
-            children: List.generate(5, (i) {
-              final filled = i < _rating;
-              return GestureDetector(
-                onTap: () => setState(() => _rating = i + 1),
-                child: Padding(
-                  padding: const EdgeInsets.only(right: 4),
-                  child: Icon(
-                    filled ? Icons.star : Icons.star_border,
-                    size: 28,
-                    color: const Color(0xFF0A0A0A),
                   ),
                 ),
               );
-            }),
+            },
           ),
-          const SizedBox(height: 16),
 
-          // Review text field
-          TextField(
-            controller: _ctrl,
-            maxLines: 4,
-            style: GoogleFonts.inter(
-                fontSize: 13, color: const Color(0xFF0A0A0A)),
-            decoration: InputDecoration(
-              hintText: 'Share your experience with this product...',
-              hintStyle: GoogleFonts.inter(
-                  fontSize: 13, color: const Color(0xFFBBBBBB)),
-              enabledBorder: const OutlineInputBorder(
-                borderRadius: BorderRadius.zero,
-                borderSide: BorderSide(color: Color(0xFFDDDDDD)),
-              ),
-              focusedBorder: const OutlineInputBorder(
-                borderRadius: BorderRadius.zero,
-                borderSide: BorderSide(color: Color(0xFF0A0A0A)),
-              ),
-              contentPadding: const EdgeInsets.all(14),
-            ),
-            onChanged: (_) => setState(() {}),
-          ),
-          const SizedBox(height: 14),
-
-          // Submit button
-          SizedBox(
-            width: double.infinity,
-            height: 46,
-            child: ElevatedButton(
-              onPressed: (_rating > 0 &&
-                      _ctrl.text.trim().isNotEmpty &&
-                      !_submitting)
-                  ? _submit
-                  : null,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF0A0A0A),
-                foregroundColor: Colors.white,
-                elevation: 0,
-                disabledBackgroundColor: const Color(0xFFCCCCCC),
-                shape: const RoundedRectangleBorder(
-                    borderRadius: BorderRadius.zero),
-              ),
-              child: _submitting
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 1.5,
+          // Top bar: counter + close
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: Colors.black54,
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(
+                      '${_current + 1} / ${widget.images.length}',
+                      style: GoogleFonts.inter(
+                        fontSize: 12,
                         color: Colors.white,
-                      ),
-                    )
-                  : Text(
-                      'SUBMIT REVIEW',
-                      style: GoogleFonts.commissioner(
-                        fontSize: 10,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 2,
+                        letterSpacing: 0.5,
                       ),
                     ),
+                  ),
+                  GestureDetector(
+                    onTap: () => Navigator.of(context).pop(),
+                    child: Container(
+                      width: 36,
+                      height: 36,
+                      decoration: const BoxDecoration(
+                        color: Colors.black54,
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.close, color: Colors.white, size: 18),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ],
-        const SizedBox(height: 32),
-      ],
+      ),
     );
   }
 }
+

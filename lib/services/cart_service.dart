@@ -113,6 +113,46 @@ class CartService {
     unawaited(_persist());
   }
 
+  /// Restores cached stock when an order is cancelled.
+  void restoreProductStock(dynamic productId, int quantity) {
+    bool changed = false;
+    for (int i = 0; i < _cartItems.length; i++) {
+      final item = _cartItems[i];
+      if (item.product.id == productId ||
+          item.product.id.toString() == productId.toString()) {
+        _cartItems[i] = CartItem(
+          product: item.product.copyWith(stock: item.product.stock + quantity),
+          quantity: item.quantity,
+          selectedSize: item.selectedSize,
+          selectedColor: item.selectedColor,
+        );
+        changed = true;
+      }
+    }
+    if (changed) unawaited(_persist());
+  }
+
+  /// Updates the cached stock for a product after an order is placed,
+  /// so the cart immediately reflects the decremented value.
+  void updateProductStock(dynamic productId, int decrementBy) {
+    bool changed = false;
+    for (int i = 0; i < _cartItems.length; i++) {
+      final item = _cartItems[i];
+      if (item.product.id == productId ||
+          item.product.id.toString() == productId.toString()) {
+        final newStock = (item.product.stock - decrementBy).clamp(0, item.product.stock);
+        _cartItems[i] = CartItem(
+          product: item.product.copyWith(stock: newStock),
+          quantity: item.quantity,
+          selectedSize: item.selectedSize,
+          selectedColor: item.selectedColor,
+        );
+        changed = true;
+      }
+    }
+    if (changed) unawaited(_persist());
+  }
+
   int getCartCount() =>
       _cartItems.fold(0, (sum, item) => sum + item.quantity);
 

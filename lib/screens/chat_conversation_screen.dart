@@ -13,12 +13,14 @@ class ChatConversationScreen extends StatefulWidget {
   final ChatRoom room;
   final String currentEmail;
   final String currentRole; // 'buyer' | 'seller'
+  final bool productJustShared;
 
   const ChatConversationScreen({
     super.key,
     required this.room,
     required this.currentEmail,
     required this.currentRole,
+    this.productJustShared = false,
   });
 
   @override
@@ -421,10 +423,13 @@ class _ChatConversationScreenState extends State<ChatConversationScreen> {
       );
 
   // Messages to display — appends the client-side welcome when no seller
-  // reply exists yet, so buyers always get immediate acknowledgement.
+  // reply exists yet, OR whenever a product was just shared.
   List<ChatMessage> get _effectiveMessages {
-    if (_loadingHistory || _hasSellerReply) return _messages;
-    return [..._messages, _welcomeMessage];
+    if (_loadingHistory) return _messages;
+    if (!_hasSellerReply || widget.productJustShared) {
+      return [..._messages, _welcomeMessage];
+    }
+    return _messages;
   }
 }
 
@@ -862,8 +867,8 @@ Future<void> openConversation(
     );
   }
 
-  // On first-ever contact, send an automated system acknowledgement
-  if (isNewRoom || (room.lastMessage.isEmpty && productRef != null)) {
+  // Send automated acknowledgement on first contact OR whenever a product is shared
+  if (isNewRoom || productRef != null) {
     await chat.sendSystemMessage(
       roomId: room.id,
       content:
@@ -880,6 +885,7 @@ Future<void> openConversation(
         room: room,
         currentEmail: currentEmail,
         currentRole: currentRole,
+        productJustShared: productRef != null,
       ),
     ),
   );

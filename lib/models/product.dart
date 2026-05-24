@@ -9,6 +9,7 @@ class Product {
   final String sellerName;
   final String sellerLogoUrl;
   final int stock;
+  final int totalSold;
 
   Product({
     required this.id,
@@ -21,6 +22,7 @@ class Product {
     this.sellerName = '',
     this.sellerLogoUrl = '',
     this.stock = 0,
+    this.totalSold = 0,
   });
 
   factory Product.fromJson(Map<String, dynamic> json) {
@@ -39,6 +41,7 @@ class Product {
       sellerLogoUrl: (sellers?['logo_url'] as String?) ??
                      (sellers?['avatar_url'] as String?) ?? '',
       stock: (json['stock'] as num?)?.toInt() ?? 0,
+      totalSold: (json['total_sold'] as num?)?.toInt() ?? 0,
     );
   }
 
@@ -83,6 +86,7 @@ class Product {
     String? sellerName,
     String? sellerLogoUrl,
     int? stock,
+    int? totalSold,
   }) {
     return Product(
       id: id ?? this.id,
@@ -95,6 +99,7 @@ class Product {
       sellerName: sellerName ?? this.sellerName,
       sellerLogoUrl: sellerLogoUrl ?? this.sellerLogoUrl,
       stock: stock ?? this.stock,
+      totalSold: totalSold ?? this.totalSold,
     );
   }
 }

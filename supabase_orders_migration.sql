@@ -17,6 +17,7 @@ CREATE TABLE orders (
   quantity          INTEGER NOT NULL DEFAULT 1,
   delivery_address  TEXT NOT NULL DEFAULT '',
   status            TEXT NOT NULL DEFAULT 'pending',
+  payment_method    TEXT NOT NULL DEFAULT 'cod',
   rider_email       TEXT,
   created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -53,3 +54,6 @@ DROP TRIGGER IF EXISTS orders_updated_at ON orders;
 CREATE TRIGGER orders_updated_at
   BEFORE UPDATE ON orders
   FOR EACH ROW EXECUTE FUNCTION touch_updated_at();
+
+-- ── Add payment_method to existing tables (safe to re-run) ───────────────────
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_method TEXT NOT NULL DEFAULT 'cod';

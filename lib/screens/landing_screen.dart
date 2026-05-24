@@ -38,10 +38,16 @@ class _LandingScreenState extends State<LandingScreen> {
     _cartService = CartService();
     _loadProducts();
 
-    // Reload products when the Supabase session is established (including
-    // INITIAL_SESSION fired after initialize(), and after login/logout).
-    _authSub = Supabase.instance.client.auth.onAuthStateChange.listen((_) {
-      if (mounted && _allProducts.isEmpty) _loadProducts();
+    // Reload products on initial session (covers guest + logged-in app start),
+    // sign-in, and sign-out so the product list always reflects the current
+    // auth state without waiting for products to be empty.
+    _authSub = Supabase.instance.client.auth.onAuthStateChange.listen((state) {
+      if (!mounted) return;
+      if (state.event == AuthChangeEvent.initialSession ||
+          state.event == AuthChangeEvent.signedIn ||
+          state.event == AuthChangeEvent.signedOut) {
+        _loadProducts();
+      }
     });
   }
 
